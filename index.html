@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="sr-Latn-ME">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0e0f12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Mapa Gusinja</title>
+<meta name="description" content="Gusinje on the printed AR cube: aim at a building and it grows to fill the cube.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='5' fill='%2300ae42'/%3E%3Crect x='8' y='14' width='5' height='9' fill='%23fff'/%3E%3Cpath d='M7 14l3.5-3 3.5 3z' fill='%23bc0900'/%3E%3Crect x='17' y='8' width='3' height='15' fill='%23fff'/%3E%3Cpath d='M16.5 8l2-3 2 3z' fill='%23875718'/%3E%3Cpath d='M3 25c6-3 10 1 26-2v5H3z' fill='%231f79e5'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/app.css">
+<script type="importmap">{"imports":{"three":"./js/vendor/three/three.module.min.js","three/addons/":"./js/vendor/three/addons/"}}</script>
+<script type="module" src="js/app.js"></script>
+</head>
+<body>
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="gl"></canvas>
+<canvas id="dbg"></canvas>
+<div id="pins" aria-hidden="false"></div>
+
+<section id="start">
+  <div class="cube3d" aria-hidden="true"><div class="c">
+    <div class="f f1"><i></i><i></i><i></i><i></i></div><div class="f f2"><i></i><i></i><i></i><i></i></div>
+    <div class="f f3"><i></i><i></i><i></i><i></i></div><div class="f f4"><i></i><i></i><i></i><i></i></div>
+    <div class="f f5"><i></i><i></i><i></i><i></i></div><div class="f f6"><i></i><i></i><i></i><i></i></div>
+  </div></div>
+  <h1 data-i18n="appName">Mapa Gusinja</h1>
+  <div class="seg langseg" role="group" aria-label="Jezik / Gjuha / Language">
+    <button data-lang="me">ME</button><button data-lang="sq">SQ</button><button data-lang="en">EN</button>
+  </div>
+  <p class="lead" data-i18n="lead"></p>
+  <button class="btn primary" id="go" data-i18n="start">Uključi kameru</button>
+  <div id="err" role="alert"></div>
+  <div class="start-links">
+    <a href="print/AR_cube_paper_test.pdf" target="_blank" rel="noopener" data-i18n="paper"></a>
+    <a href="print/AR_cube_70mm_2colour.3mf" download data-i18n="print3mf"></a>
+    <a href="print/AR_cube_70mm_STL.zip" download data-i18n="printStl"></a>
+  </div>
+  <p class="start-note"><span data-i18n="note"></span><br><span data-i18n="credits"></span></p>
+</section>
+
+<header id="hud" hidden>
+  <div class="pill" id="status" aria-live="polite"><i class="dot"></i><span id="statusText"></span></div>
+  <div class="icons">
+    <button class="ibtn" id="btnHelp" aria-label="Help">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9.5"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1.1.9-1.1 1.6v.5"/><circle cx="12" cy="17" r=".6" fill="currentColor"/></svg>
+    </button>
+    <button class="ibtn" id="btnSettings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+    </button>
+  </div>
+</header>
+
+<div id="hint" class="off" hidden><div class="frame"></div><div id="hintText"></div></div>
+
+<!-- aiming ring (town mode) -->
+<div id="ring" hidden>
+  <svg viewBox="0 0 100 100" aria-hidden="true">
+    <circle class="track" cx="50" cy="50" r="44"/>
+    <circle class="prog" id="ringProg" cx="50" cy="50" r="44" pathLength="100"/>
+  </svg>
+  <div id="ringLabel"><b id="ringName"></b><small id="ringSub"></small></div>
+</div>
+
+<footer id="dock" hidden>
+  <p id="dockHint"></p>
+  <div class="actions" id="bldActions" hidden>
+    <button class="btn" id="btnBack">← <span data-i18n="back"></span></button>
+    <button class="btn" id="btnTurn">⟳ <span data-i18n="turn"></span></button>
+    <button class="btn" id="btnFace" data-i18n="face"></button>
+    <button class="btn" id="btnInfo" data-i18n="about"></button>
+  </div>
+  <nav id="chips" aria-label="Buildings"></nav>
+</footer>
+
+<div class="scrim" id="scrim"></div>
+
+<section class="sheet" id="sheetSettings" aria-label="Settings">
+  <div class="grab"></div>
+  <h2 data-i18n="settings"></h2>
+  <div class="row"><label data-i18n="language"></label>
+    <div class="seg langseg"><button data-lang="me">ME</button><button data-lang="sq">SQ</button><button data-lang="en">EN</button></div></div>
+  <div class="row"><label for="rngTown"><span data-i18n="townSize"></span><small><span id="townVal"></span> · <span data-i18n="townSizeSmall"></span></small></label><input type="range" id="rngTown" min="1.4" max="3.6" step="0.1"></div>
+  <div class="row"><label for="chkHold"><span data-i18n="holdSelect"></span><small data-i18n="holdSelectSmall"></small></label>
+    <span class="switch"><input type="checkbox" id="chkHold"><span></span></span></div>
+  <div class="row"><label for="chkUpright"><span data-i18n="upright"></span><small data-i18n="uprightSmall"></small></label>
+    <span class="switch"><input type="checkbox" id="chkUpright"><span></span></span></div>
+  <div class="row"><label><span data-i18n="base"></span><small data-i18n="baseSmall"></small></label>
+    <div class="seg" id="segPlinth"><button data-v="stone" data-i18n="stone"></button><button data-v="none" data-i18n="off"></button></div></div>
+  <div class="row"><label for="chkShadow" data-i18n="shadows"></label><span class="switch"><input type="checkbox" id="chkShadow"><span></span></span></div>
+  <div class="row"><label><span data-i18n="camView"></span><small data-i18n="camViewSmall"></small></label>
+    <div class="seg" id="segView"><button data-v="auto" data-i18n="auto"></button><button data-v="fit" data-i18n="fit"></button><button data-v="fill" data-i18n="fill"></button></div></div>
+  <div class="row"><label for="rngFov"><span data-i18n="fov"></span><small id="fovVal">66°</small></label><input type="range" id="rngFov" min="50" max="85" step="1"></div>
+  <div class="row"><label for="chkDebug"><span data-i18n="debug"></span><small data-i18n="debugSmall"></small></label>
+    <span class="switch"><input type="checkbox" id="chkDebug"><span></span></span></div>
+</section>
+
+<section class="sheet" id="sheetInfo" aria-label="About this building">
+  <div class="grab"></div>
+  <h2 id="infoTitle"></h2>
+  <p class="mdesc" id="infoDesc"></p>
+  <dl class="kv" id="infoKv"></dl>
+</section>
+
+<section class="sheet help" id="sheetHelp" aria-label="Help">
+  <div class="grab"></div>
+  <h2 data-i18n="help"></h2>
+  <ol id="helpSteps"></ol>
+  <p class="start-note" style="text-align:left"><span data-i18n="credits"></span><br><span id="ver"></span></p>
+</section>
+
+<div class="toast" id="toast"></div>
+</body>
+</html>

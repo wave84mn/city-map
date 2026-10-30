@@ -1,0 +1,176 @@
+{
+ "version": 1,
+ "source": "Gusinje jigsaw (wave84mn/gusinje-slagalica): 276 x 276 mm, scale 1:4500, ground x2.5, landmarks x2.5. Millimetres, Y up, -Z north.",
+ "town": {
+  "file": "data/town.glb",
+  "inner": [
+   -138.1,
+   -138.1,
+   138.1,
+   138.1
+  ],
+  "floorY": 2.0
+ },
+ "landmarks": [
+  {
+   "id": "vezirova",
+   "piece": "D4",
+   "name": {
+    "me": "Vezirova džamija",
+    "en": "Vezir's Mosque",
+    "sq": "Xhamia e Vezirit"
+   },
+   "pos": [
+    -14.9,
+    23.4,
+    -18.0
+   ],
+   "model": "vezirova-dzamija"
+  },
+  {
+   "id": "radoncica",
+   "piece": "F4",
+   "name": {
+    "me": "Radončića džamija",
+    "en": "Radončić Mosque",
+    "sq": "Xhamia e Radonçiqëve"
+   },
+   "pos": [
+    28.5,
+    17.9,
+    -18.4
+   ]
+  },
+  {
+   "id": "opstina",
+   "piece": "E4",
+   "name": {
+    "me": "Opština",
+    "en": "Town Hall",
+    "sq": "Komuna"
+   },
+   "pos": [
+    19.8,
+    18.0,
+    -19.2
+   ],
+   "model": "opstina"
+  },
+  {
+   "id": "kula",
+   "piece": "E4",
+   "name": {
+    "me": "Kula Rašića",
+    "en": "Rašić Tower House",
+    "sq": "Kulla e Rashiqëve"
+   },
+   "pos": [
+    -0.4,
+    18.5,
+    -37.5
+   ],
+   "model": "kula-rasica"
+  },
+  {
+   "id": "balica",
+   "piece": "E3",
+   "name": {
+    "me": "Balića kuća",
+    "en": "Balić House",
+    "sq": "Shtëpia e Baliqëve"
+   },
+   "pos": [
+    23.1,
+    14.0,
+    -41.5
+   ]
+  },
+  {
+   "id": "sahat",
+   "piece": "E2",
+   "name": {
+    "me": "Sahat kula",
+    "en": "Clock Tower",
+    "sq": "Kulla e Sahatit"
+   },
+   "pos": [
+    13.1,
+    20.0,
+    -71.4
+   ],
+   "model": "sahat-kula"
+  },
+  {
+   "id": "cekica",
+   "piece": "F6",
+   "name": {
+    "me": "Čekića džamija",
+    "en": "Čekić Mosque",
+    "sq": "Xhamia e Çekiqëve"
+   },
+   "pos": [
+    36.5,
+    18.7,
+    65.8
+   ],
+   "model": "cekica-dzamija"
+  },
+  {
+   "id": "crkva",
+   "piece": "C5",
+   "name": {
+    "me": "Crkva sv. Đorđa",
+    "en": "St George's Church",
+    "sq": "Kisha e Shën Gjergjit"
+   },
+   "pos": [
+    -53.6,
+    19.9,
+    12.0
+   ],
+   "model": "sv-djordje"
+  },
+  {
+   "id": "groblje",
+   "piece": "B3",
+   "name": {
+    "me": "Groblje",
+    "en": "Cemetery",
+    "sq": "Varrezat"
+   },
+   "pos": [
+    -100.4,
+    11.4,
+    -44.1
+   ]
+  },
+  {
+   "id": "tereni",
+   "piece": "D2",
+   "name": {
+    "me": "Sportski tereni",
+    "en": "Sports courts",
+    "sq": "Fushat sportive"
+   },
+   "pos": [
+    -30.0,
+    7.4,
+    -79.0
+   ]
+  },
+  {
+   "id": "titex",
+   "piece": "D2",
+   "name": {
+    "me": "Titex",
+    "en": "Titex factory",
+    "sq": "Titex"
+   },
+   "pos": [
+    -15.3,
+    8.7,
+    -92.2
+   ]
+  }
+ ]
+}
