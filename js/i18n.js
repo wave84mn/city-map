@@ -198,5 +198,5 @@ export function applyStatic() {
   const ol = document.getElementById('helpSteps');
   if (ol) { ol.innerHTML = ''; for (const s of t('helpSteps')) { const li = document.createElement('li'); li.textContent = s; ol.append(li); } }
   for (const b of document.querySelectorAll('.langseg button')) b.setAttribute('aria-pressed', String(b.dataset.lang === lang));
-  document.title = t('appName');
+  document.title = t('appName') + ' · Xplore Prokletije';
 }

@@ -3,6 +3,7 @@ usage: python3 seq.py still|flip|orbit OUT.y4m [--size 720x1280] [--secs 12]
  still: cube held still, top face tilted towards the camera.
  flip:  still, then at 7 s the cube is turned upside down (180 deg about the camera's x axis) in 1 s, then still.
  orbit: the cube slowly turns about its vertical axis.
+ below: held above eye level, so the camera looks up at the underside of the town.
 """
 import math, os, subprocess, sys, tempfile
 import numpy as np, cv2
@@ -33,6 +34,8 @@ def main():
             a += math.pi * s
         if kind == 'orbit':
             yaw += tt * 0.5
+        if kind == 'below':
+            a, ty = math.radians(-22), -55.0
         R = Rx(a) @ D @ Ry(yaw)
         t = np.array([0.0, ty, z])
         img = bg.copy()

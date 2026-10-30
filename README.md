@@ -1,5 +1,7 @@
 # Mapa Gusinja – Gusinje city map on the AR cube
 
+Part of **Xplore Prokletije**.
+
 Hold the printed AR cube in front of your phone and the town of Gusinje stands on it. Aim the ring at a building and hold still, or tap its dot, and the building rises out of the map and grows until it fills the cube. Turn the cube upside down (or tap **Grad / Town**) to go back to the map.
 
 **Open:** https://wave84mn.github.io/city-map/ (Chrome on Android, Safari on iPhone; the page must be opened over https for the camera).
@@ -12,6 +14,8 @@ Hold the printed AR cube in front of your phone and the town of Gusinje stands o
 - **Back.** Turn the cube upside down (two quarter-rolls within 2.5 s count too), or tap the back button. Turning it over during the grow reverses it.
 - **Languages:** Montenegrin/Bosnian, Albanian, English (ME / SQ / EN). The first visit follows the phone's language.
 - Works with the printed 70 mm cube, the 60 mm paper cube or the flat paper card (same marker codes as ar-cube).
+- **Tracking tolerance:** a pose is accepted when its fit error is under 12 % of the markers' size on screen (3 % for a single marker), and the last pose is kept for 0.5 s through short gaps. A hand-folded paper cube is 1–2 mm off the ideal shape, which at 20 cm is 10–15 px; the old fixed limit (3.5–6 px) dropped the cube about a third of the time in the first phone test.
+- The map has a green base underneath (the jigsaw pieces have no undersides). Shadows are drawn only under a building, not under the town (faster).
 
 ## Buildings on the map
 | Dot (jigsaw piece) | Model |

@@ -10,7 +10,7 @@ import { Tracker, projectedBox } from './cv/tracker.js';
 import { OneEuro, matToQuat, mulv } from './cv/pose.js';
 import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 
-const VERSION = '0.2 · 30 Oct 2026';
+const VERSION = '0.3 · 30 Oct 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
@@ -60,7 +60,7 @@ scene.environmentIntensity = 0.55;
 scene.add(new THREE.HemisphereLight(0xfff6ea, 0x6d655a, 0.6));
 const sun = new THREE.DirectionalLight(0xfff3e0, 2.3);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(1024, 1024);
 sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.5;
 scene.add(sun, sun.target);
@@ -268,13 +268,21 @@ function prepareTown(root) {
   let tris = 0;
   root.traverse(o => {
     if (!o.isMesh) return;
-    o.material = mat; o.castShadow = true; o.receiveShadow = true;
+    o.material = mat; o.castShadow = false; o.receiveShadow = false;
     const g = o.geometry; tris += (g.index ? g.index.count : g.attributes.position.count) / 3;
   });
   root.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(root);
   townInfo = { minY: box.min.y, maxY: box.max.y, width: Math.max(box.max.x - box.min.x, box.max.z - box.min.z), tris: Math.round(tris) };
   probeLandmarks(root);
+  // the jigsaw pieces have no undersides (never seen in the jigsaw game): close the map with a green base
+  const [x0, z0, x1, z1] = city.town.inner || [box.min.x, box.min.z, box.max.x, box.max.z];
+  const baseH = 1.6;
+  const base = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0 + 0.4, baseH, z1 - z0 + 0.4),
+    new THREE.MeshStandardMaterial({ color: 0x2fa457, roughness: 0.85, metalness: 0, side: THREE.DoubleSide, clippingPlanes: [clipPlane] }));
+  base.position.set((x0 + x1) / 2, box.min.y + baseH / 2 + 0.02, (z0 + z1) / 2);
+  base.name = 'town-base';
+  root.add(base);
   townRoot = root;
   townGroup.add(root);
   applyTownSize();
@@ -711,10 +719,23 @@ function onFrame(nowMs) {
 }
 
 const tmpM = new THREE.Matrix4(), tmpQ = new THREE.Quaternion();
+// Judge the fit by its error relative to how big the markers look. A real cube, especially the folded paper
+// one, is a millimetre or two off the ideal shape; held close to the camera that is 10-15 px, which an
+// absolute pixel limit wrongly treats as a lost cube. Wrong poses are far worse than this (or ambiguous).
+const REL_MAX = 0.12, REL_MAX_ONE = 0.03, HOLD = 0.5;
+function markerSide(m) { let s = 0; for (let k = 0; k < 4; k++) { const a = m.corners[k], b = m.corners[(k + 1) % 4]; s += Math.hypot(a[0] - b[0], a[1] - b[1]); } return s / 4; }
+function acceptPose(p, markers) {
+  if (p.ambiguous) return false;
+  const used = markers.filter(m => p.ids.includes(m.id));
+  if (!used.length) return false;
+  const side = used.reduce((a, m) => a + markerSide(m), 0) / used.length;
+  p.rel = p.rms / Math.max(side, 1);
+  return p.n >= 2 ? (p.rel < REL_MAX || p.rms < 6) : (p.rel < REL_MAX_ONE || p.rms < 3.5);
+}
 function handleResult(res, t) {
   for (const key of ['cube', 'card']) {
     const st = T[key], p = res.poses[key];
-    const good = p && (p.rms < 3.5 || (p.n >= 2 && p.rms < 6)) && !p.ambiguous;
+    const good = p && acceptPose(p, res.markers);
     if (good) {
       if (t - st.seen > 0.6) { st.filtT.reset(); st.filtQ.reset(); st.prevQ = null; st.acquired = true; }
       st.raw = p; st.seen = t;
@@ -726,7 +747,7 @@ function handleResult(res, t) {
       st.q = qf.map(x => x / nq); st.t = tf;
     }
   }
-  const visible = k => T[k].raw && t - T[k].seen < Math.max(0.3, 2.5 / Math.max(fps, 1));
+  const visible = k => T[k].raw && t - T[k].seen < Math.max(HOLD, 2.5 / Math.max(fps, 1));
   const next = visible('cube') ? 'cube' : visible('card') ? 'card' : null;
   if (next !== active) switchTarget(next, t);
   for (const key of ['cube', 'card']) {
@@ -847,13 +868,14 @@ function render(t = now()) {
     // clip plane = the face the town stands on
     const hp = new THREE.Vector3().setFromMatrixPosition(holder.matrixWorld);
     upW.set(0, 1, 0).applyQuaternion(holder.getWorldQuaternion(tmpQ)).normalize();
-    clipPlane.setFromNormalAndCoplanarPoint(upW, hp.clone().addScaledVector(upW, -0.02));
+    // plane a little under the town's base (the stone block's top is 0.2 mm lower still)
+    clipPlane.setFromNormalAndCoplanarPoint(upW, hp.clone().addScaledVector(upW, -0.12));
     if (townRoot) uTownInv.value.copy(townRoot.matrixWorld).invert();
     // light from above, slightly from the camera side
     const toCam = hp.clone().negate().normalize();
     sunV.copy(hp).addScaledVector(upW, 600).addScaledVector(toCam, 300).add(new THREE.Vector3(-180, 0, 0));
     sun.position.copy(sunV); sun.target.position.copy(hp);
-    sun.castShadow = settings.shadows;
+    sun.castShadow = settings.shadows && city$.mode !== 'town';   // shadows only under a building
     const r = city$.mode === 'building' ? 1.6 * S : 0.8 * settings.town * S + 20;
     const sc = sun.shadow.camera;
     if (sc.right !== r) { sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r; sc.near = 1; sc.far = 2000; sc.updateProjectionMatrix(); }
@@ -938,7 +960,7 @@ function toast(msg) { const el = $('#toast'); el.textContent = msg; el.classList
 window.__city = {
   T, place, settings, view, timing, city$, sensor,
   get active() { return active; }, get lastRes() { return lastRes; }, get fps() { return fps; }, get procMs() { return procMs; },
-  get townInfo() { return townInfo; }, get landmarks() { return city && city.landmarks; },
+  get townInfo() { return townInfo; }, get landmarks() { return city && city.landmarks; }, get townRoot() { return townRoot; },
   select, goBack, setLang: l => { setLang(l); onLangChange(); },
   // tools: height of the map and the jigsaw piece at (x, z) in map millimetres
   probe(x, z) {
