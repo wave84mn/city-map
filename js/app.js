@@ -10,7 +10,7 @@ import { Tracker, projectedBox } from './cv/tracker.js';
 import { OneEuro, matToQuat, mulv } from './cv/pose.js';
 import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 
-const VERSION = '0.4 · 30 Oct 2026';
+const VERSION = '0.5 · 30 Oct 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
@@ -181,7 +181,7 @@ if (/Android/i.test(UA) && !inChrome) {
   $('#openChrome').href = intent;
   $('#chromeBox').hidden = false;
 }
-if (!isMobile || params.get('p') === 'windows') { const l = document.querySelector('#start .lead'); if (l) l.dataset.i18n = 'leadPc'; }
+if (params.get('p') === 'windows' || (!isMobile && params.get('p') !== 'android')) { const l = document.querySelector('#start .lead'); if (l) l.dataset.i18n = 'leadPc'; }
 
 // ---------------- data ----------------
 applyStatic();

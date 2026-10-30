@@ -39,7 +39,8 @@ Crkva sv. Antona is outside the map area (west, towards Grebaje), so it has no d
 - `data/city.json`: the 11 landmarks (names in three languages, jigsaw piece, position on the map in mm) and which model belongs to each.
 - `models/<id>.json` + `.jpg`: building models from **Gusinjska kocka** (bertiscus/gusinjska-kocka), GKM1 format (quantized mesh as base64 JSON) with a 1024 px baked texture; Y up, base at y = 0, door towards +Z.
 - `print/`: the cube print files and the paper cube/card PDF (from ar-cube).
-- `print/qr/`: QR cards with "Xplore Prokletije" in the middle and "Mapa Gusinja" below: `mapa-gusinja-qr-android.png` opens `…/city-map/?p=android`, `mapa-gusinja-qr-windows.png` opens `…/city-map/?p=windows` (error correction H; 300 dpi, about 14 × 18 cm, scale down freely; a 3 cm wide code still scans). Made by `tools/qr_cards.py` (segno).
+- `img/`: the Xplore Prokletije logo without its background: `xplore-prokletije-light.png` (original colours, for white paper) and `xplore-prokletije-dark.png` (light tower, lifted blue, for dark screens). Made by `tools/logo_prep.py`, which splits each pixel into dark ink, blue ink and paper so edges stay smooth. The app's accent colour is the logo's blue.
+- `print/qr/`: QR cards with the Xplore Prokletije logo in the middle and "Mapa Gusinja" below: `mapa-gusinja-qr-android.png` opens `…/city-map/?p=android`, `mapa-gusinja-qr-windows.png` opens `…/city-map/?p=windows` (error correction H; 300 dpi, about 14 × 18 cm, scale down freely; a 3 cm wide code still scans). Made by `tools/qr_cards.py` (segno).
 - On Android outside Chrome (a scanner app's built-in browser, Samsung Internet…) the start screen offers **Open in Chrome** (an intent link). On a computer, or with `?p=windows`, the start text talks about the computer's camera.
 - `js/vendor/three`: three.js r184 (MIT).
 

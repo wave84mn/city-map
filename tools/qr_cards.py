@@ -1,5 +1,5 @@
-"""QR cards for Mapa Gusinja: a QR code with "Xplore Prokletije" in the middle and the program name below.
-usage: PYTHONPATH=<segno> python3 qr_cards.py OUTDIR
+"""QR cards for Mapa Gusinja: a QR code with the Xplore Prokletije logo in the middle and the program name below.
+usage: PYTHONPATH=<segno> python3 qr_cards.py OUTDIR [LOGO.png]   (default logo: ../img/xplore-prokletije-light.png)
 Writes mapa-gusinja-qr-android.png / -windows.png (300 dpi: about 14 x 18 cm at full size; scale down freely). Error correction H (30 %), so the centre label can cover part of the code.
 """
 import os, sys
@@ -12,9 +12,10 @@ CARDS = [
     {'id': 'windows', 'url': BASE + '?p=windows', 'platform': 'Windows · Edge / Chrome'},
 ]
 NAME = 'Mapa Gusinja'
-INK = (21, 22, 26)            # QR modules and text
-ACCENT = (232, 163, 61)       # app accent (orange)
-MUTED = (110, 106, 98)
+INK = (23, 33, 42)            # logo's dark slate: QR modules and text
+ACCENT = (1, 92, 248)         # logo's blue
+MUTED = (104, 112, 122)
+LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'img', 'xplore-prokletije-light.png')
 FONT = '/usr/share/fonts/opentype/inter/Inter-{}.otf'
 font = lambda w, s: ImageFont.truetype(FONT.format(w), s)
 
@@ -37,7 +38,7 @@ def mountain(draw, cx, cy, w, h):
     draw.polygon([P(13, 3), P(16.2, 6.7), P(14, 5.8), P(12.4, 7.4), P(10.8, 6)], fill=(255, 255, 255))
 
 
-def card(c, out):
+def card(c, out, logo_path=LOGO):
     qr = segno.make(c['url'], error='h', micro=False, boost_error=False)
     n = qr.symbol_size(border=0)[0]
     mod = 34                                  # px per module
@@ -51,17 +52,19 @@ def card(c, out):
             if v:
                 x, y = (col + quiet) * mod, (r + quiet) * mod
                 d.rectangle([x, y, x + mod - 1, y + mod - 1], fill=INK)
-    # centre label: whole modules cleared, white rounded box, 1 module margin
-    bw, bh = 17, 9                            # modules (odd, so it is centred on the middle module)
+    # centre: whole modules cleared, white rounded box with the logo
+    bw, bh = 19, 9                            # modules (odd, so it is centred on the middle module)
     c0, r0 = quiet + (n - bw) // 2, quiet + (n - bh) // 2
     bx0, by0, bx1, by1 = c0 * mod, r0 * mod, (c0 + bw) * mod, (r0 + bh) * mod
     d.rectangle([bx0, by0, bx1 - 1, by1 - 1], fill='white')
-    pad = mod * 0.45
-    d.rounded_rectangle([bx0 + pad, by0 + pad, bx1 - pad, by1 - pad], radius=mod * 1.1, outline=ACCENT, width=max(4, mod // 6), fill='white')
-    cx, cy = (bx0 + bx1) / 2, (by0 + by1) / 2
-    mountain(d, cx, by0 + bh * mod * 0.235, mod * 2.9, mod * 1.3)
-    tracked(d, (cx, cy + mod * 0.05), 'XPLORE', font('ExtraBold', int(mod * 1.6)), INK, mod * 0.30)
-    tracked(d, (cx, cy + mod * 2.05), 'PROKLETIJE', font('ExtraBold', int(mod * 1.6)), INK, mod * 0.06)
+    pad = mod * 0.4
+    soft = tuple(int(255 - 0.22 * (255 - v)) for v in ACCENT)     # the blue, faded: a quiet frame
+    d.rounded_rectangle([bx0 + pad, by0 + pad, bx1 - pad, by1 - pad], radius=mod * 1.2, outline=soft, width=max(3, mod // 9), fill='white')
+    logo = Image.open(logo_path).convert('RGBA')
+    iw, ih = (bw - 1.7) * mod, (bh - 1.7) * mod                 # room inside the frame
+    k = min(iw / logo.width, ih / logo.height)
+    logo = logo.resize((round(logo.width * k), round(logo.height * k)), Image.LANCZOS)
+    img.paste(logo, (round((bx0 + bx1 - logo.width) / 2), round((by0 + by1 - logo.height) / 2)), logo)
     # below: program name, platform, link
     y = W + 20
     d.text((W / 2, y + 95), NAME, font=font('ExtraBold', 150), fill=INK, anchor='mm')
@@ -75,6 +78,7 @@ def card(c, out):
 
 if __name__ == '__main__':
     out = sys.argv[1] if len(sys.argv) > 1 else 'qr'
+    logo = sys.argv[2] if len(sys.argv) > 2 else LOGO
     for c in CARDS:
-        png, ver, n, cover = card(c, out)
+        png, ver, n, cover = card(c, out, logo)
         print(png, f'version {ver} ({n}x{n}), label covers {cover:.1%} of the code')

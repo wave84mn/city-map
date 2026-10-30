@@ -5,8 +5,8 @@
   --line: rgba(255, 255, 255, 0.10);
   --text: #f3f1ec;
   --muted: #a9a59c;
-  --accent: #e8a33d;
-  --accent-ink: #1b1304;
+  --accent: #2f7bff;           /* Xplore Prokletije blue, lifted for dark screens (logo: #015CF8) */
+  --accent-ink: #ffffff;
   --ok: #6fcf97;
   --warn: #f2c94c;
   --radius: 16px;
@@ -29,7 +29,7 @@ a { color: var(--accent); }
 /* ---------- start screen ---------- */
 #start { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; justify-content: center; align-items: center;
   padding: calc(24px + var(--safe-t)) calc(16px + var(--safe-r)) calc(24px + var(--safe-b)) calc(16px + var(--safe-l));
-  background: radial-gradient(120% 80% at 50% 10%, #2a2419 0%, var(--bg) 60%); text-align: center; overflow-y: auto; }
+  background: radial-gradient(120% 80% at 50% 8%, #142440 0%, var(--bg) 62%); text-align: center; overflow-y: auto; }
 #start.hidden { display: none; }
 .cube3d { width: 92px; height: 92px; perspective: 600px; margin: 0 auto 28px; }
 .cube3d .c { width: 100%; height: 100%; position: relative; transform-style: preserve-3d; animation: spin 9s linear infinite; }
@@ -44,7 +44,7 @@ a { color: var(--accent); }
 #start h1 { font-size: 30px; line-height: 1.1; margin: 0 0 8px; letter-spacing: -0.01em; }
 #start p.lead { color: var(--muted); margin: 0 auto 26px; max-width: 30em; }
 .btn { appearance: none; border: 0; border-radius: 999px; padding: 14px 26px; font-weight: 650; cursor: pointer; }
-.btn.primary { background: var(--accent); color: var(--accent-ink); font-size: 17px; min-width: 220px; box-shadow: 0 8px 30px rgba(232,163,61,0.25); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); font-size: 17px; min-width: 220px; box-shadow: 0 8px 30px rgba(47,123,255,0.32); }
 .btn.primary:active { transform: translateY(1px); }
 .btn.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
 .start-links { margin-top: 26px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; max-width: 520px; }
@@ -168,12 +168,20 @@ input[type=range] { width: 46%; accent-color: var(--accent); }
 .sheet .kv dd small { color: var(--muted); }
 
 /* Xplore Prokletije title on the start screen */
-#start .brand { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 0 0 26px; color: var(--accent);
-  font-size: 15px; font-weight: 750; letter-spacing: 0.22em; text-transform: uppercase; }
-#start .brand svg { width: 34px; height: 16px; flex: none; }
-@media (min-height: 700px) { #start .brand { font-size: 17px; margin-bottom: 34px; } }
+#start .brand { display: block; width: min(76vw, 300px); height: auto; margin: 0 auto 22px; }
+@media (min-height: 760px) { #start .brand { width: min(80vw, 340px); margin-bottom: 30px; } }
+/* the logo already shows a building on a cube: keep the turning cube smaller under it */
+#start .cube3d { width: 64px; height: 64px; margin-bottom: 20px; }
+#start .cube3d .f { padding: 6px; gap: 4px; border-radius: 8px; }
+#start .cube3d .f1 { transform: translateZ(32px); } #start .cube3d .f2 { transform: rotateY(90deg) translateZ(32px); }
+#start .cube3d .f3 { transform: rotateY(180deg) translateZ(32px); } #start .cube3d .f4 { transform: rotateY(-90deg) translateZ(32px); }
+#start .cube3d .f5 { transform: rotateX(90deg) translateZ(32px); } #start .cube3d .f6 { transform: rotateX(-90deg) translateZ(32px); }
 
 /* Android outside Chrome: offer to switch */
 #chromeBox { margin-top: 18px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; color: var(--muted); font-size: 14px; }
 #chromeBox[hidden] { display: none; }
 #chromeBox .btn { padding: 9px 16px; font-size: 14px; text-decoration: none; }
+
+/* short screens: keep every item its full size and let the start screen scroll instead of squeezing */
+#start { justify-content: center; justify-content: safe center; }
+#start > * { flex-shrink: 0; }
