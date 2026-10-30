@@ -10,7 +10,7 @@ import { Tracker, projectedBox } from './cv/tracker.js';
 import { OneEuro, matToQuat, mulv } from './cv/pose.js';
 import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 
-const VERSION = '0.5 · 30 Oct 2026';
+const VERSION = '0.6 · 30 Oct 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
@@ -95,6 +95,7 @@ let active = null;                       // 'cube' | 'card' | null
 const place = { Q: new THREE.Quaternion(), from: new THREE.Quaternion(), to: new THREE.Quaternion(), t0: 0, dur: 0.45,
   yaw: 0, yawFrom: 0, yawTo: 0, yt0: 0, needFace: true, appear: 0 };
 let frameNo = 0, lastRes = null, fps = 0, procMs = 0, lastFrameT = 0;
+let filmMode = false, filmSkipDraw = false; // showcase video (tools/film): frames and poses come from a script
 const timing = { capture: 0, read: 0, track: 0, render: 0 };
 const sensor = { ok: false, beta: 0, gamma: 0, t: 0 };
 
@@ -624,7 +625,7 @@ window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 300));
 video.addEventListener('resize', resize);
 function resize() {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const dpr = Math.min(window.devicePixelRatio || 1, filmMode ? 4 : 2);
   renderer.setPixelRatio(dpr);
   renderer.setSize(glCanvas.clientWidth || window.innerWidth, glCanvas.clientHeight || window.innerHeight, false);
   dbgCanvas.width = glCanvas.width; dbgCanvas.height = glCanvas.height;
@@ -878,7 +879,7 @@ function render(t = now()) {
   yawGroup.scale.setScalar(0.85 + 0.15 * ease(place.appear));
   stepCity(tn);
   if (active) {
-    holder.updateMatrixWorld(true);
+    anchors[active].updateMatrixWorld(true);       // from the anchor: on the first tracked frame its new pose isn't applied yet
     // clip plane = the face the town stands on
     const hp = new THREE.Vector3().setFromMatrixPosition(holder.matrixWorld);
     upW.set(0, 1, 0).applyQuaternion(holder.getWorldQuaternion(tmpQ)).normalize();
@@ -894,9 +895,12 @@ function render(t = now()) {
     const sc = sun.shadow.camera;
     if (sc.right !== r) { sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r; sc.near = 1; sc.far = 2000; sc.updateProjectionMatrix(); }
   }
-  renderer.clear();
-  if (videoTex) renderer.render(bgScene, bgCam);
-  renderer.render(scene, camera);
+  if (filmSkipDraw) scene.updateMatrixWorld();     // showcase video, off-camera frames: keep the clock, skip the drawing
+  else {
+    renderer.clear();
+    if (videoTex) renderer.render(bgScene, bgCam);
+    renderer.render(scene, camera);
+  }
   updatePins(tn);
   drawDebug();
 }
@@ -1000,4 +1004,38 @@ window.__city = {
     city$.mode = 'frozen'; bldGroup.visible = true; applyGrow(a);
   },
   pins: () => [...pinEls].map(([id, el]) => ({ id, hidden: el.hidden, on: el.classList.contains('on'), tf: el.style.transform })),
+  // showcase video (tools/film): run without a camera. Each frame gets a picture (any canvas) and, when the
+  // cube is in view, its pose (R row-major 3x3, t in mm, OpenCV camera axes); the rest is the normal app.
+  film: {
+    async start(w, h) {
+      filmMode = true;
+      for (const [k, v] of [['videoWidth', w], ['videoHeight', h]]) Object.defineProperty(video, k, { configurable: true, get: () => v });
+      disp.width = w; disp.height = h;
+      videoTex = new THREE.CanvasTexture(disp);
+      videoTex.colorSpace = THREE.SRGBColorSpace;
+      videoTex.generateMipmaps = false; videoTex.minFilter = THREE.LinearFilter;
+      bgMat.map = videoTex; bgMat.needsUpdate = true;
+      $('#start').classList.add('hidden');
+      for (const id of ['#hud', '#dock', '#hint']) $(id).hidden = false;
+      resize(); updateDock();
+      await Promise.all(city.landmarks.filter(l => l.model).map(l => loadBuilding(l.model)));
+    },
+    frame(src, pose, t, draw = true) {
+      frameNo++; fps = 30; lastFrameT = t;
+      if (draw) dctx.drawImage(src, 0, 0, disp.width, disp.height);
+      if (pose) {
+        const st = T.cube;
+        let q = matToQuat(pose.R);
+        if (st.prevQ && q[0] * st.prevQ[0] + q[1] * st.prevQ[1] + q[2] * st.prevQ[2] + q[3] * st.prevQ[3] < 0) q = q.map(x => -x);
+        const n = Math.hypot(...q);
+        st.prevQ = q; st.q = q.map(x => x / n); st.t = pose.t.slice();
+        st.raw = { R: pose.R, t: pose.t, n: 12, rms: 0, ids: [] }; st.seen = t;
+      }
+      handleResult({ poses: {}, markers: [] }, t);
+      videoTex.needsUpdate = draw;
+      filmSkipDraw = !draw;
+      render(t);
+      filmSkipDraw = false;
+    },
+  },
 };

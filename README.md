@@ -56,4 +56,12 @@ Run from a working folder that has ar-cube's `build/` (layout and face images, f
 - `topview.html?cx=&cz=&w=` (with `topshot.cjs OUT.png cx cz w`): the map from above with a millimetre grid and the dots, for finding where a new landmark goes. In the app, `__city.probe(x, z)` gives the map height and jigsaw piece at a spot.
 Serve the folder first, e.g. `python3 -m http.server 8123`.
 
+## Showcase video (tools/film/)
+A vertical 1080 × 1920 promo clip (about 37 s, Montenegrin captions) filmed from the real app in headless Chromium:
+- `film.cjs OUTDIR`: steps the app frame by frame on a virtual clock and takes a screenshot of each frame (JPEG). `SHOTS="B-town:60,C-choose:120"` renders only those frames, for checking.
+- `director.js`: the script, loaded into the app page. It draws the "camera picture" (a wooden table with the printed cube, same markers as `data/layout.json`), moves the phone and the cube, hands the cube's pose and the tilt reading to the app through `__city.film`, and lays the captions, title and QR ending on top (`film.css`). Everything else is the normal app: the town, the ring and hold-to-choose, the list, turning the cube over, the three languages.
+- `music.py`: a soft synthesised sound track (pad, plucks, bells, whooshes) timed to the events `film.cjs` writes; `qr_square.py`: the QR code at the end (the app's link, logo in the middle).
+- `encode.sh OUTDIR`: one H.264 file per segment, joined, plus the sound → `OUTDIR/mapa-gusinja-showcase.mp4`.
+In software rendering a frame with the whole town takes about 4 s, so the full film takes roughly 45 minutes.
+
 Map data © OpenStreetMap contributors (ODbL). Terrain: Copernicus DEM. three.js (MIT); marker pipeline adapted from js-aruco / js-aruco2 (MIT).

@@ -1,0 +1,40 @@
+/* Showcase video overlay (tools/film): captions, title, outro. The app itself is unchanged; it only gets Inter,
+   which is close to the phone system fonts (the test browser has no Roboto / San Francisco). */
+body { font-family: Inter, system-ui, sans-serif; }
+
+#fx { position: fixed; inset: 0; z-index: 50; pointer-events: none; font-family: Inter, system-ui, sans-serif; color: #fff; }
+
+/* captions: under the status bar, above the town */
+#fx-cap { position: absolute; left: 0; right: 0; top: 74px; display: flex; justify-content: center; }
+#fx-cap .line { max-width: 380px; padding: 11px 20px 12px; border-radius: 18px; text-align: center;
+  font-size: 25px; line-height: 1.18; font-weight: 800; letter-spacing: -0.012em;
+  background: rgba(14, 22, 40, 0.84); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.28), inset 0 0 0 1px rgba(255, 255, 255, 0.07); }
+#fx-cap .line span { color: rgba(255, 255, 255, 0.38); }
+#fx-cap .line span.on { color: #fff; }
+#fx-cap .line i { font-style: normal; color: #2f7bff; margin: 0 9px; }
+
+/* title over the first shot */
+#fx-title { position: absolute; inset: 0; }
+#fx-title .shade { position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(9, 15, 28, 0.94) 0%, rgba(9, 15, 28, 0.82) 34%, rgba(9, 15, 28, 0.25) 62%, rgba(9, 15, 28, 0) 78%); }
+#fx-title .box { position: absolute; left: 0; right: 0; top: 104px; text-align: center; }
+#fx-title .logo { width: 292px; height: auto; display: block; margin: 0 auto 26px; filter: drop-shadow(0 6px 24px rgba(0, 0, 0, 0.35)); }
+#fx-title h1 { margin: 0; font-size: 46px; line-height: 1.05; font-weight: 800; letter-spacing: -0.02em; }
+#fx-title p { margin: 10px 0 0; font-size: 21px; font-weight: 600; color: #8fb6ff; letter-spacing: 0.01em; }
+
+/* outro */
+#fx-outro { position: absolute; inset: 0; background: radial-gradient(120% 80% at 50% 8%, #142440 0%, #0e0f12 62%); }
+#fx-outro .box { position: absolute; left: 0; right: 0; top: 98px; text-align: center; }
+#fx-outro .logo { width: 236px; height: auto; display: block; margin: 0 auto 18px; }
+#fx-outro h2 { margin: 0 0 26px; font-size: 36px; font-weight: 800; letter-spacing: -0.02em; }
+#fx-outro .qr { width: 272px; height: 272px; margin: 0 auto; padding: 14px; background: #fff; border-radius: 26px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(47, 123, 255, 0.35), 0 0 70px rgba(47, 123, 255, 0.22); }
+#fx-outro .qr img { width: 100%; height: 100%; display: block; image-rendering: auto; }
+#fx-outro .cta { margin: 28px 0 0; font-size: 27px; font-weight: 800; }
+#fx-outro .url { margin: 6px 0 0; font-size: 17px; font-weight: 600; color: #8fb6ff; }
+#fx-outro .note { margin: 22px auto 0; font-size: 15px; line-height: 1.4; color: rgba(255, 255, 255, 0.62); }
+
+/* a finger tap */
+#fx-tap { position: absolute; left: 0; top: 0; width: 58px; height: 58px; margin: -29px 0 0 -29px; border-radius: 50%; opacity: 0;
+  background: rgba(255, 255, 255, 0.28); box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.92), 0 4px 18px rgba(0, 0, 0, 0.35); }
