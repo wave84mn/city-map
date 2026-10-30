@@ -172,3 +172,8 @@ input[type=range] { width: 46%; accent-color: var(--accent); }
   font-size: 15px; font-weight: 750; letter-spacing: 0.22em; text-transform: uppercase; }
 #start .brand svg { width: 34px; height: 16px; flex: none; }
 @media (min-height: 700px) { #start .brand { font-size: 17px; margin-bottom: 34px; } }
+
+/* Android outside Chrome: offer to switch */
+#chromeBox { margin-top: 18px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; color: var(--muted); font-size: 14px; }
+#chromeBox[hidden] { display: none; }
+#chromeBox .btn { padding: 9px 16px; font-size: 14px; text-decoration: none; }

@@ -10,7 +10,7 @@ import { Tracker, projectedBox } from './cv/tracker.js';
 import { OneEuro, matToQuat, mulv } from './cv/pose.js';
 import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 
-const VERSION = '0.3 · 30 Oct 2026';
+const VERSION = '0.4 · 30 Oct 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
@@ -168,6 +168,20 @@ function upInCamera() {
   const sx = ux * Math.cos(th) - uy * Math.sin(th), sy = ux * Math.sin(th) + uy * Math.cos(th);
   return [sx, -sy, -uz];
 }
+
+// ---------------- platform: the QR codes add ?p=android or ?p=windows ----------------
+const UA = navigator.userAgent || '';
+const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(UA) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(UA));
+// real Chrome (incl. Chrome custom tabs), not an app's built-in browser (WebView "wv") or another browser
+const inChrome = /Chrome\/\d/.test(UA) && !/; wv\)|SamsungBrowser|EdgA|OPR\/|Firefox|FxiOS|FBAN|FB_IAB|Instagram|MiuiBrowser|UCBrowser|YaBrowser|HuaweiBrowser|DuckDuckGo|GSA\//i.test(UA);
+if (/Android/i.test(UA) && !inChrome) {
+  // intent link: opens this page in Chrome; falls back to the normal link if Chrome is missing
+  const here = location.href.split('#')[0];
+  const intent = 'intent://' + here.replace(/^https?:\/\//, '') + '#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=' + encodeURIComponent(here) + ';end';
+  $('#openChrome').href = intent;
+  $('#chromeBox').hidden = false;
+}
+if (!isMobile || params.get('p') === 'windows') { const l = document.querySelector('#start .lead'); if (l) l.dataset.i18n = 'leadPc'; }
 
 // ---------------- data ----------------
 applyStatic();
