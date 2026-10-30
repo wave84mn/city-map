@@ -1,0 +1,46 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>top view</title>
+<style>html,body{margin:0;background:#222}canvas{display:block}</style>
+<script type="importmap">{"imports":{"three":"../js/vendor/three/three.module.min.js","three/addons/":"../js/vendor/three/addons/"}}</script>
+</head><body>
+<script type="module">
+// Top-down view of the town model with a millimetre grid and the landmark spots, for placing new landmarks.
+// ?cx=&cz=&w=  centre and width of the view in map mm (x east, z south)
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+const q = new URLSearchParams(location.search);
+const cx = +(q.get('cx') ?? 0), cz = +(q.get('cz') ?? 0), w = +(q.get('w') ?? 280), px = +(q.get('px') ?? 1400);
+const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+r.setSize(px, px); r.outputColorSpace = THREE.SRGBColorSpace; document.body.append(r.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x222222);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x555555, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(-0.4, 1, -0.3); scene.add(sun);
+const cam = new THREE.OrthographicCamera(cx - w / 2, cx + w / 2, -cz + w / 2, -cz - w / 2, -1000, 1000);
+cam.position.set(0, 300, 0); cam.up.set(0, 0, -1); cam.lookAt(0, 0, 0);
+// with up = -Z and looking down: screen x = world x, screen up = world -z (north)
+cam.left = cx - w / 2; cam.right = cx + w / 2; cam.top = -cz + w / 2; cam.bottom = -cz - w / 2; cam.updateProjectionMatrix();
+const loader = new GLTFLoader(); loader.setMeshoptDecoder(MeshoptDecoder);
+const city = await (await fetch('../data/city.json')).json();
+const g = await loader.loadAsync('../' + city.town.file);
+g.scene.traverse(o => { if (o.isMesh) o.material = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }); });
+scene.add(g.scene);
+r.render(scene, cam);
+// overlay: grid every 5 mm (labels every 10), landmarks
+const c2 = document.createElement('canvas'); c2.width = c2.height = px; const ctx = c2.getContext('2d');
+ctx.drawImage(r.domElement, 0, 0);
+const X = x => (x - (cx - w / 2)) / w * px, Z = z => (z - (cz - w / 2)) / w * px;
+ctx.font = '13px monospace'; ctx.lineWidth = 1;
+for (let v = Math.ceil((cx - w / 2) / 5) * 5; v <= cx + w / 2; v += 5) { ctx.strokeStyle = v % 10 ? 'rgba(0,0,0,0.18)' : 'rgba(0,0,0,0.45)'; ctx.beginPath(); ctx.moveTo(X(v), 0); ctx.lineTo(X(v), px); ctx.stroke(); if (!(v % 10)) { ctx.fillStyle = '#000'; ctx.fillText(v, X(v) + 2, 12); } }
+for (let v = Math.ceil((cz - w / 2) / 5) * 5; v <= cz + w / 2; v += 5) { ctx.strokeStyle = v % 10 ? 'rgba(0,0,0,0.18)' : 'rgba(0,0,0,0.45)'; ctx.beginPath(); ctx.moveTo(0, Z(v)); ctx.lineTo(px, Z(v)); ctx.stroke(); if (!(v % 10)) { ctx.fillStyle = '#000'; ctx.fillText(v, 2, Z(v) - 2); } }
+ctx.font = 'bold 15px sans-serif';
+for (const L of city.landmarks) {
+  const x = X(L.pos[0]), y = Z(L.pos[2]);
+  ctx.fillStyle = L.model ? '#ffc400' : '#fff'; ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(x, y, 6, 0, 7); ctx.fill(); ctx.stroke();
+  ctx.lineWidth = 4; ctx.strokeText(L.id, x + 9, y + 5); ctx.fillStyle = '#fff'; ctx.fillText(L.id, x + 9, y + 5);
+}
+document.body.innerHTML = ''; document.body.append(c2);
+window.__done = true;
+</script>
+</body></html>

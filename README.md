@@ -18,13 +18,15 @@ Hold the printed AR cube in front of your phone and the town of Gusinje stands o
 |---|---|
 | Kula Rašića (E4) | kula-rasica |
 | Sahat kula (E2) | sahat-kula |
+| Kula Nekovića (E3), across the bridge from Sahat kula | kula-nekovica |
 | Opština (E4) | opstina |
 | Vezirova džamija (D4) | vezirova-dzamija |
+| Sebilj (D4), on the little square beside Vezirova | sebilj |
 | Čekića džamija (F6) | cekica-dzamija |
 | Crkva sv. Đorđa (C5) | sv-djordje |
 | Radončića džamija (F4), Balića kuća (E3), Groblje (B3), Sportski tereni (D2), Titex (D2) | name only, no model yet |
 
-Sebilj and Kula Nekovića have models (in Gusinjska kocka) but no spot on the jigsaw map yet; Crkva sv. Antona is outside the map area (west, towards Grebaje).
+Crkva sv. Antona is outside the map area (west, towards Grebaje), so it has no dot.
 
 ## Files
 - `index.html`, `css/app.css`, `js/app.js`: the app. `js/i18n.js`: all texts in three languages.
@@ -44,6 +46,7 @@ Run from a working folder that has ar-cube's `build/` (layout and face images, f
 - `seq.py still|flip|orbit OUT.y4m`: synthetic camera video of the cube (uses `synth.py` from ar-cube).
 - `e2e.cjs VIDEO.y4m OUT dwell|nohold|select|flip`: runs the app in Chromium with that video as the camera and a simulated tilt sensor: hold-to-choose, tapping a dot, the list + back button + language switch, and turning the cube upside down.
 - `frames.cjs VIDEO.y4m OUT <landmark>`: screenshots of the grow animation frozen at 0–100 %.
+- `topview.html?cx=&cz=&w=` (with `topshot.cjs OUT.png cx cz w`): the map from above with a millimetre grid and the dots, for finding where a new landmark goes. In the app, `__city.probe(x, z)` gives the map height and jigsaw piece at a spot.
 Serve the folder first, e.g. `python3 -m http.server 8123`.
 
 Map data © OpenStreetMap contributors (ODbL). Terrain: Copernicus DEM. three.js (MIT); marker pipeline adapted from js-aruco / js-aruco2 (MIT).

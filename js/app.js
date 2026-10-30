@@ -10,7 +10,7 @@ import { Tracker, projectedBox } from './cv/tracker.js';
 import { OneEuro, matToQuat, mulv } from './cv/pose.js';
 import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 
-const VERSION = '0.1 · 30 Oct 2026';
+const VERSION = '0.2 · 30 Oct 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
@@ -940,6 +940,18 @@ window.__city = {
   get active() { return active; }, get lastRes() { return lastRes; }, get fps() { return fps; }, get procMs() { return procMs; },
   get townInfo() { return townInfo; }, get landmarks() { return city && city.landmarks; },
   select, goBack, setLang: l => { setLang(l); onLangChange(); },
+  // tools: height of the map and the jigsaw piece at (x, z) in map millimetres
+  probe(x, z) {
+    const rc = new THREE.Raycaster(new THREE.Vector3(x, 400, z), new THREE.Vector3(0, -1, 0));
+    townRoot.updateMatrixWorld(true);
+    const inv = new THREE.Matrix4().copy(townRoot.matrixWorld);
+    rc.ray.applyMatrix4(inv);
+    const h = rc.intersectObject(townRoot, true)[0];
+    if (!h) return null;
+    const p = h.point.clone().applyMatrix4(inv.clone().invert());
+    let o = h.object; while (o && !/^[A-H][1-8]$/.test(o.name) && o.parent) o = o.parent;
+    return { y: +p.y.toFixed(2), piece: o && /^[A-H][1-8]$/.test(o.name) ? o.name : (h.object.name || '?') };
+  },
   // tests: show the grow animation frozen at a (0 = on the map, 1 = fills the cube)
   async freeze(id, a) {
     const L = byId(id), wrap = await loadBuilding(L.model);

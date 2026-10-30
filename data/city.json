@@ -28,6 +28,22 @@
    "model": "vezirova-dzamija"
   },
   {
+   "id": "sebilj",
+   "piece": "D4",
+   "name": {
+    "me": "Sebilj",
+    "en": "Sebilj fountain",
+    "sq": "Sebili"
+   },
+   "pos": [
+    -5.5,
+    10.3,
+    -21.0
+   ],
+   "model": "sebilj",
+   "note": "Placed on the small square beside Vezirova džamija (user: next to Vezirova). Not in the jigsaw model."
+  },
+  {
    "id": "radoncica",
    "piece": "F4",
    "name": {
@@ -99,6 +115,22 @@
     -71.4
    ],
    "model": "sahat-kula"
+  },
+  {
+   "id": "nekovica",
+   "piece": "E3",
+   "name": {
+    "me": "Kula Nekovića",
+    "en": "Neković Tower",
+    "sq": "Kulla e Nekoviqëve"
+   },
+   "pos": [
+    13.1,
+    8.5,
+    -54.7
+   ],
+   "model": "kula-nekovica",
+   "note": "The small square house at the south end of the bridge by Sahat kula, west of the road (user: across the bridge from Sahat kula)."
   },
   {
    "id": "cekica",
