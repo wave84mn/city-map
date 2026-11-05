@@ -12,7 +12,7 @@ import { estimateFov, median } from './cv/calib.js';
 import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 import { HandEngine, HandSet, drawHandCutouts, drawPinchCursors } from './hands.js';
 
-const VERSION = '0.7.1 · 5 Nov 2026';
+const VERSION = '0.7.2 · 5 Nov 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
@@ -22,7 +22,7 @@ const GROW = 1.35, SHRINK = 1.1, DWELL = 1.4, COOLDOWN = 2.0, FLIP_WINDOW = 2.5;
 const OPP = [5, 3, 4, 1, 2, 0];          // opposite face (top front right back left bottom)
 
 // ---------------- settings (per-viewer convenience only) ----------------
-const DEFAULTS = { plinth: 'stone', town: 2.0, hold: true, upright: true, shadows: true, debug: false, fovFix: null, view: 'auto', hands: true, camId: '' };
+const DEFAULTS = { plinth: 'stone', town: 2.0, hold: true, upright: true, shadows: true, debug: false, fovFix: null, view: 'auto', hands: true, camId: '', camManual: false };
 const settings = Object.assign({}, DEFAULTS, readStore('citymap.settings') || {});
 if (params.has('debug')) settings.debug = true;
 if (params.has('fov')) settings.fovFix = +params.get('fov');            // a fixed field of view (otherwise learned)
@@ -129,7 +129,8 @@ async function start() {
   if (!navigator.mediaDevices?.getUserMedia) return fail(tr('errNoCam'));
   $('#go').disabled = true; $('#go').textContent = tr('starting');
   try {
-    await openCamera(settings.camId || null);
+    const saved = settings.camId && (settings.camManual || lensFov(settings.camId) >= LENS_MIN) ? settings.camId : null;
+    await openCamera(saved);
   } catch (e) {
     $('#go').disabled = false; $('#go').textContent = tr('start');
     const name = e && e.name;
@@ -186,7 +187,13 @@ async function openCamera(deviceId) {
   fovReset();
   if (lastFrameT) updateProjection();
 }
-const isBack = d => !/front|user|selfie|prednj|facing front/i.test(d.label || '');
+function isBack(d) {
+  const l = d.label || '';
+  if (/front|user|selfie|prednj/i.test(l)) return false;
+  if (/back|rear|environment|zadnj|stra[žz]nj/i.test(l)) return true;
+  try { const f = d.getCapabilities && d.getCapabilities().facingMode; if (f && f.length) return f.includes('environment'); } catch { /* not supported */ }
+  return true;
+}
 async function listCameras() {
   try {
     const all = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
@@ -195,26 +202,104 @@ async function listCameras() {
   } catch { cam.list = []; }
   paintCameraUI();
 }
-// Chrome on Android names the main back camera "camera2 0"; if it opened another lens by itself, use the main one
-async function pickMainCamera() {
-  if (settings.camId || cam.list.length < 2) return;
-  const main = cam.list.find(d => /camera2 0\b/.test(d.label || ''));
-  if (!main || main.deviceId === cam.devId) return;
-  try { await openCamera(main.deviceId); paintCameraUI(); } catch { /* keep what we have */ }
+
+// ---------------- the right lens, found by measuring ----------------
+// Phones with several back cameras sometimes give the browser the telephoto lens (on the user's phone about
+// 19 deg instead of about 69 deg in its camera app: everything 4x too big, a hand beside the cube out of view).
+// The app measures each lens's field of view on the cube (two or more faces seen) and, while the lens is
+// narrower than LENS_MIN, moves on to the next back camera by itself; the widest normal lens wins and is kept.
+// Choosing a lens with the camera button (or in Settings) turns the search off.
+const LENS_KEY = 'citymap.lenses', LENS_MIN = 40, LENS_WAIT = 7;
+let lensDb = {}; try { lensDb = JSON.parse(localStorage.getItem(LENS_KEY) || '{}') || {}; } catch { /* storage off */ }
+const lens = { searching: false, tried: new Set(), fail: new Set(), since: 0, switching: false, warned: false };
+// measured angle of a lens; 0 = it never showed the cube well enough this time (not saved: it may have been the person)
+const lensFov = id => (lensDb[id] ? lensDb[id].fov : lens.fail.has(id) ? 0 : null);
+function saveLens() { try { localStorage.setItem(LENS_KEY, JSON.stringify(lensDb)); } catch { /* storage off */ } }
+// order to try: Chrome's main camera ("camera2 0") first, then the rest as listed
+function lensOrder() { return cam.list.slice().sort((a, b) => (/camera2 0\b/.test(b.label) ? 1 : 0) - (/camera2 0\b/.test(a.label) ? 1 : 0)); }
+async function useCamera(id, why) {
+  if (lens.switching) return;
+  lens.switching = true;
+  try { await openCamera(id); } catch { lens.fail.add(id); }
+  lens.switching = false;
+  lens.since = now();
+  paintCameraUI();
+  if (why) toast(why);
 }
+async function pickMainCamera() {
+  if (cam.list.length < 2) return;
+  if (settings.camManual && settings.camId) return;
+  // a lens measured wide enough before: use it straight away
+  const good = lensOrder().filter(d => lensFov(d.deviceId) >= LENS_MIN).sort((a, b) => Math.abs(lensFov(a.deviceId) - 66) - Math.abs(lensFov(b.deviceId) - 66))[0];
+  if (good) { if (good.deviceId !== cam.devId) await useCamera(good.deviceId); return; }
+  const first = lensOrder().find(d => lensFov(d.deviceId) == null);
+  if (first && first.deviceId !== cam.devId && lensFov(cam.devId) == null) await useCamera(first.deviceId);
+  lens.since = now();
+}
+// called when this lens's field of view has been measured, and now and then while searching
+function checkLens() {
+  if (lens.switching || (settings.camManual && settings.camId)) return;
+  const cur = lensFov(cam.devId);
+  if (cam.list.length < 2) { if (cur != null && cur < LENS_MIN) widenOrWarn(); return; }
+  if (cur == null) {
+    // no measurement yet: if this lens never shows the cube well enough, give up on it after a while
+    if (lens.searching && now() - lens.since > LENS_WAIT) lens.fail.add(cam.devId); else return;
+  } else if (cur >= LENS_MIN) {
+    if (settings.camId !== cam.devId) { settings.camId = cam.devId; saveSettings(); }
+    if (lens.searching) { lens.searching = false; toast(tr('lensOk', { n: camNo(), fov: Math.round(cur) })); }
+    return;
+  }
+  // this lens is too narrow (or useless): try one not measured yet, else the best measured
+  const next = lensOrder().find(d => lensFov(d.deviceId) == null && !lens.tried.has(d.deviceId) && d.deviceId !== cam.devId);
+  if (next) {
+    lens.searching = true; lens.tried.add(next.deviceId);
+    useCamera(next.deviceId, tr('lensTry', { fov: Math.round(lensFov(cam.devId) || 0) }));
+    return;
+  }
+  const best = lensOrder().filter(d => lensFov(d.deviceId) >= LENS_MIN).sort((a, b) => Math.abs(lensFov(a.deviceId) - 66) - Math.abs(lensFov(b.deviceId) - 66))[0];
+  lens.searching = false;
+  if (best && best.deviceId !== cam.devId) { useCamera(best.deviceId, tr('lensOk', { n: cam.list.indexOf(best) + 1, fov: Math.round(lensFov(best.deviceId)) })); return; }
+  if (!best) widenOrWarn();
+}
+// no wider lens to switch to: zoom out if the camera allows it, otherwise say so once
+async function widenOrWarn() {
+  const z = cam.caps.zoom;
+  if (z && z.min < cam.zoom - 0.05 && cam.track) {
+    try { await cam.track.applyConstraints({ advanced: [{ zoom: z.min }] }); cam.zoom = cam.track.getSettings().zoom || z.min; fovReset(); delete lensDb[cam.devId]; saveLens(); return; } catch { /* no */ }
+  }
+  if (!lens.warned) { lens.warned = true; toast(tr('lensNarrow', { fov: Math.round(fovS.value) })); }
+}
+const camNo = () => Math.max(0, cam.list.findIndex(d => d.deviceId === cam.devId)) + 1;
 async function nextCamera() {
   if (cam.list.length < 2) return;
   const i = cam.list.findIndex(d => d.deviceId === cam.devId);
   const d = cam.list[(i + 1) % cam.list.length];
-  settings.camId = d.deviceId; saveSettings();
-  try { await openCamera(d.deviceId); } catch { toast(tr('errOther', { m: 'camera' })); }
-  paintCameraUI();
-  toast(`${tr('camera')} ${cam.list.indexOf(d) + 1} / ${cam.list.length}`);
+  settings.camId = d.deviceId; settings.camManual = true; saveSettings();     // the person chose: no more searching
+  lens.searching = false;
+  await useCamera(d.deviceId);
+  const f = lensFov(d.deviceId);
+  toast(`${tr('camera')} ${camNo()} / ${cam.list.length}` + (f ? ` · ${Math.round(f)}°` : ''));
 }
 function paintCameraUI() {
   const b = $('#btnCam');
   b.hidden = cam.list.length < 2;
-  $('#camNo').textContent = String(Math.max(0, cam.list.findIndex(d => d.deviceId === cam.devId)) + 1);
+  $('#camNo').textContent = String(camNo());
+  // Settings: one button per back camera, with its measured angle, and "automatic"
+  const row = $('#rowCam'), seg = $('#segCam');
+  row.hidden = cam.list.length < 2;
+  seg.innerHTML = '';
+  const auto = document.createElement('button'); auto.textContent = tr('fovAuto');
+  auto.setAttribute('aria-pressed', String(!settings.camManual));
+  auto.onclick = () => { settings.camManual = false; saveSettings(); lens.tried.clear(); checkLens(); paintCameraUI(); };
+  seg.append(auto);
+  cam.list.forEach((d, i) => {
+    const f = lensFov(d.deviceId), btn = document.createElement('button');
+    btn.textContent = String(i + 1) + (f ? ` · ${Math.round(f)}°` : '');
+    btn.title = d.label || '';
+    btn.setAttribute('aria-pressed', String(!!settings.camManual && d.deviceId === cam.devId));
+    btn.onclick = async () => { settings.camId = d.deviceId; settings.camManual = true; saveSettings(); await useCamera(d.deviceId); };
+    seg.append(btn);
+  });
 }
 $('#btnCam').addEventListener('click', nextCamera);
 
@@ -260,6 +345,7 @@ function learnFov(res, K) {
   if (fovS.samples.length > 25) fovS.samples.shift();
   if (fovS.samples.length >= 4) {
     setFov(median(fovS.samples), 'learned');
+    if (cam.devId && Math.abs((lensFov(cam.devId) || 0) - fovS.value) > 1.5) { lensDb[cam.devId] = { fov: Math.round(fovS.value * 10) / 10, z: cam.zoom }; saveLens(); paintCameraUI(); checkLens(); }
     if (fovS.samples.length >= 6 && fovS.samples.length - fovS.savedAt >= 5) {
       fovS.savedAt = fovS.samples.length;
       try { const saved = JSON.parse(localStorage.getItem(FOV_KEY) || '{}'); saved[fovS.key] = Math.round(fovS.value * 10) / 10; localStorage.setItem(FOV_KEY, JSON.stringify(saved)); } catch { /* storage off */ }
@@ -908,6 +994,7 @@ function onFrame(nowMs) {
   const p2 = performance.now();
   const res = tracker.process(img.data, w, h, { x0: region.sx, y0: region.sy, scale: w / region.sw }, K, t, { radius: region.radius });
   learnFov(res, K);
+  if (lens.searching && frameNo % 15 === 0) checkLens();
   const p3 = performance.now();
   procMs = procMs * 0.85 + 0.15 * (p3 - p0);
   timing.capture = timing.capture * 0.85 + 0.15 * (p1 - p0);
