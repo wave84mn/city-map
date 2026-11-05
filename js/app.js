@@ -9,8 +9,9 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Tracker, projectedBox } from './cv/tracker.js';
 import { OneEuro, matToQuat, mulv } from './cv/pose.js';
 import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
+import { HandEngine, HandSet, drawHandCutouts, drawPinchCursors } from './hands.js';
 
-const VERSION = '0.6 · 30 Oct 2026';
+const VERSION = '0.7 · 5 Nov 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
@@ -20,10 +21,11 @@ const GROW = 1.35, SHRINK = 1.1, DWELL = 1.4, COOLDOWN = 2.0, FLIP_WINDOW = 2.5;
 const OPP = [5, 3, 4, 1, 2, 0];          // opposite face (top front right back left bottom)
 
 // ---------------- settings (per-viewer convenience only) ----------------
-const DEFAULTS = { plinth: 'stone', town: 2.0, hold: true, upright: true, shadows: true, debug: false, fov: 66, view: 'auto' };
+const DEFAULTS = { plinth: 'stone', town: 2.0, hold: true, upright: true, shadows: true, debug: false, fov: 66, view: 'auto', hands: true };
 const settings = Object.assign({}, DEFAULTS, readStore('citymap.settings') || {});
 if (params.has('debug')) settings.debug = true;
 if (params.has('fov')) settings.fov = +params.get('fov');
+if (params.get('hands') === 'off') settings.hands = false;           // tests (and anyone who wants the old way)
 function readStore(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } }
 function saveSettings() { try { localStorage.setItem('citymap.settings', JSON.stringify(settings)); } catch { /* private mode */ } }
 
@@ -140,6 +142,7 @@ async function start() {
   updateDock();
   runLoop();
   preloadBuildings();
+  startHands();
 }
 function fail(msg) { const e = $('#err'); e.textContent = msg; e.style.display = 'block'; }
 
@@ -251,7 +254,7 @@ const uTime = { value: 0 }, uTownInv = { value: new THREE.Matrix4() };
 function makeTownMaterial() {
   // flat shading (the jigsaw model carries no normals); water is marked by vertex-colour alpha 128
   const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0.0, flatShading: true,
-    clippingPlanes: [clipPlane], clipShadows: true });
+    clippingPlanes: [clipPlane, ...winPlanes], clipShadows: true });
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uTime = uTime;
     sh.uniforms.uTownInv = uTownInv;
@@ -272,14 +275,18 @@ function makeTownMaterial() {
             + 0.55 * sin((vTPos.x + vTPos.z) * 0.71 + uTime * 2.2);
     diffuseColor.rgb *= 0.93 + 0.10 * w;
     diffuseColor.rgb += vec3(0.05, 0.07, 0.09) * smoothstep(0.7, 1.45, w);
-  }`)
+  }
+#ifdef DOUBLE_SIDED
+  if (!gl_FrontFacing) { diffuseColor.rgb = vec3(0.19, 0.11, 0.055); waterFx = 0.0; }   // inside of the ground, seen where the frame cuts it
+#endif`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n  if (waterFx > 0.5) roughnessFactor = 0.32;');
   };
   m.customProgramCacheKey = () => 'town-water-v1';
   return m;
 }
+let townMat = null;
 function prepareTown(root) {
-  const mat = makeTownMaterial();
+  const mat = townMat = makeTownMaterial();
   let tris = 0;
   root.traverse(o => {
     if (!o.isMesh) return;
@@ -290,11 +297,13 @@ function prepareTown(root) {
   const box = new THREE.Box3().setFromObject(root);
   townInfo = { minY: box.min.y, maxY: box.max.y, width: Math.max(box.max.x - box.min.x, box.max.z - box.min.z), tris: Math.round(tris) };
   probeLandmarks(root);
+  const gs = city.landmarks.map(L => L.ground).sort((a, b) => a - b);
+  groundMap = gs[gs.length >> 1] ?? 6;
   // the jigsaw pieces have no undersides (never seen in the jigsaw game): close the map with a green base
   const [x0, z0, x1, z1] = city.town.inner || [box.min.x, box.min.z, box.max.x, box.max.z];
   const baseH = 1.6;
   const base = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0 + 0.4, baseH, z1 - z0 + 0.4),
-    new THREE.MeshStandardMaterial({ color: 0x2fa457, roughness: 0.85, metalness: 0, side: THREE.DoubleSide, clippingPlanes: [clipPlane] }));
+    new THREE.MeshStandardMaterial({ color: 0x2fa457, roughness: 0.85, metalness: 0, side: THREE.DoubleSide, clippingPlanes: [clipPlane, ...winPlanes] }));
   base.position.set((x0 + x1) / 2, box.min.y + baseH / 2 + 0.02, (z0 + z1) / 2);
   base.name = 'town-base';
   root.add(base);
@@ -316,13 +325,63 @@ function probeLandmarks(root) {
     L.top = top; L.ground = ground; L.hMap = Math.max(3, top - ground);
   }
 }
-function townScale() { return townInfo ? settings.town * S / townInfo.width : 1; }
-function townBaseY() { return townInfo ? -townInfo.minY * townScale() + 0.05 : 0; }
+function townScale() { return townInfo ? settings.town * S / townInfo.width : 1; }   // whole town on the cube
+function townK() { return townScale() * mapView.z; }                                 // with the zoom
+function townBaseY() { return townInfo ? -townInfo.minY * townK() + 0.05 : 0; }
 function applyTownSize() {
   if (!townInfo) return;
-  const k = townScale();
+  const k = townK();
   townGroup.scale.setScalar(k);
+  townGroup.position.x = -mapView.cx * k; townGroup.position.z = -mapView.cz * k;
   if (city$.mode === 'town') townGroup.position.y = townBaseY();
+}
+
+// ---------------- the map window: slide and zoom the town inside its frame ----------------
+// The frame stays where the whole town was (twice the cube's width); zooming in shows part of the town,
+// bigger, and the hand slides it around. Everything outside the frame is clipped away; the cut sides show earth.
+const ZMAX = 5;
+const mapView = { z: 1, cx: 0, cz: 0, anim: null };         // zoom, and the map point (mm) in the frame's centre
+const winLocal = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([x, z]) => new THREE.Plane(new THREE.Vector3(x, 0, z), 0));
+const winPlanes = winLocal.map(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 1e6));
+const innerHalf = () => (city && city.town.inner ? (city.town.inner[2] - city.town.inner[0]) / 2 : 138.1);
+const winHalf = () => innerHalf() * townScale();
+// soft: past the edge the map follows the hand only a little (and springs back when let go)
+function clampView(soft = false) {
+  mapView.z = clamp(mapView.z, 1, ZMAX);
+  const m = innerHalf() * (1 - 1 / mapView.z);
+  const c = v => soft ? (v > m ? m + (v - m) * 0.3 : v < -m ? -m + (v + m) * 0.3 : v) : clamp(v, -m, m);
+  mapView.cx = c(mapView.cx); mapView.cz = c(mapView.cz);
+}
+function settleView() {
+  const z = clamp(mapView.z, 1, ZMAX), m = innerHalf() * (1 - 1 / z);
+  const cx = clamp(mapView.cx, -m, m), cz = clamp(mapView.cz, -m, m);
+  if (Math.abs(cx - mapView.cx) + Math.abs(cz - mapView.cz) + Math.abs(z - mapView.z) > 0.01) animateView(z, cx, cz, 0.35);
+}
+// map millimetres <-> the frame (yaw group) millimetres
+const mapToLocal = (x, z) => [(x - mapView.cx) * townK(), (z - mapView.cz) * townK()];
+const localToMap = (x, z) => [x / townK() + mapView.cx, z / townK() + mapView.cz];
+const inWindow = (x, z, m = 0) => { const [lx, lz] = mapToLocal(x, z), h = winHalf() - m; return Math.abs(lx) <= h && Math.abs(lz) <= h; };
+let groundMap = 6;                                          // typical ground height on the map (mm), for the hand's plane
+function updateWindowPlanes() {
+  const h = winHalf() + 0.02;
+  yawGroup.updateMatrixWorld(true);
+  winLocal.forEach((p, i) => { p.constant = h; winPlanes[i].copy(p).applyMatrix4(yawGroup.matrixWorld); });
+}
+// the cut sides: the inside of the terrain is drawn in earth colour, which only shows where the frame cuts it
+let zoomedLook = false;
+function setZoomedLook(on) {
+  if (on === zoomedLook || !townMat) return;
+  zoomedLook = on;
+  townMat.side = on ? THREE.DoubleSide : THREE.FrontSide; townMat.needsUpdate = true;
+}
+function animateView(z, cx, cz, dur = 0.6) { mapView.anim = { t0: now(), dur, from: { z: mapView.z, cx: mapView.cx, cz: mapView.cz }, to: { z, cx, cz } }; }
+function stepView(tn) {
+  const a = mapView.anim;
+  if (!a) return;
+  const k = ease((tn - a.t0) / a.dur);
+  mapView.z = a.from.z * Math.pow(a.to.z / a.from.z, k);
+  mapView.cx = a.from.cx + (a.to.cx - a.from.cx) * k; mapView.cz = a.from.cz + (a.to.cz - a.from.cz) * k;
+  if (k >= 1) mapView.anim = null;
 }
 
 // ---------------- buildings (GKM1 models from Gusinjska kocka) ----------------
@@ -400,9 +459,11 @@ async function select(id) {
   try { wrap = await loadBuilding(L.model); } catch (e) { city$.mode = 'town'; city$.sel = null; toast(tr('errModel', { m: e.message })); return; }
   if (city$.sel !== L) return;
   bldGroup.clear(); bldGroup.add(wrap);
-  const u = wrap.userData, k = townScale();
-  // town point (x, y, z) sits at (x k, townBaseY + y k, z k) in the yaw group
-  const p0 = new THREE.Vector3(L.pos[0] * k, townBaseY() + L.ground * k, L.pos[2] * k);
+  const u = wrap.userData, k = townK();
+  // town point (x, y, z) sits at ((x - cx) k, townBaseY + y k, (z - cz) k) in the yaw group (k includes the zoom);
+  // a building chosen from the list while it is outside the frame starts at the frame's edge
+  const h = winHalf(), [lx, lz] = mapToLocal(L.pos[0], L.pos[2]);
+  const p0 = new THREE.Vector3(clamp(lx, -h, h), townBaseY() + L.ground * k, clamp(lz, -h, h));
   const s0 = (L.hMap * k) / u.height;
   const s1 = fitScale(u);
   city$.from = { p: p0, s: s0, yaw: 0 };
@@ -439,7 +500,7 @@ const lerpAng = (a, b, k) => { let d = b - a; d = Math.atan2(Math.sin(d), Math.c
 function applyGrow(a) {
   const f = city$.from, to = city$.to, k = townScale();
   const sink = easeIO((a - 0.08) / 0.72);
-  const depth = (townInfo.maxY - townInfo.minY) * k + 2;
+  const depth = (townInfo.maxY - townInfo.minY) * townK() + 2;
   townGroup.position.y = townBaseY() - sink * depth;
   townGroup.visible = sink < 0.999;
   const g = easeIO((a - 0.1) / 0.9);
@@ -499,14 +560,14 @@ function buildPins() {
 }
 // dots can overlap in the dense centre: a tap goes to the nearest one, and dots with a building win close calls
 const pinXY = new Map();
-function nearestPin(x, y) {
+function nearestPin(x, y, r = 30) {
   if (!city || (!x && !y)) return null;
   let best = null, bs = Infinity;
   for (const L of city.landmarks) {
     const p = pinXY.get(L.id), el = pinEls.get(L.id);
     if (!p || el.hidden) continue;
     const d = Math.hypot(p[0] - x, p[1] - y);
-    if (d > 30) continue;
+    if (d > r) continue;
     const score = d - (L.model ? 12 : 0);
     if (score < bs) { bs = score; best = L; }
   }
@@ -530,7 +591,7 @@ function updatePins(tNow) {
       const behind = pv.z > -1;
       pv.project(camera);
       const x = (pv.x + 1) / 2 * W, y = (1 - pv.y) / 2 * H;
-      const vis = !fromBelow && !behind && x > -20 && x < W + 20 && y > -20 && y < H + 20;
+      const vis = !fromBelow && !behind && x > -20 && x < W + 20 && y > -20 && y < H + 20 && inWindow(L.pos[0], L.pos[2], 1);
       el.hidden = !vis;
       if (!vis) continue;
       el.style.transform = `translate(${x.toFixed(1)}px,${y.toFixed(1)}px)`;
@@ -555,7 +616,10 @@ function updatePins(tNow) {
     city$.lastXY = xy; city$.lastT = tNow;
   }
   const inside = bestD < ringR;
-  const canHold = settings.hold && best.model && inside && steady && best.id !== city$.blocked && tNow - city$.townSince > COOLDOWN;
+  // with hand tracking on, holding still doesn't choose: the phone is held still on purpose while the other hand
+  // works the map, and the hand chooses by a quick pinch instead (the ring still names what's in the middle)
+  const handBusy = (settings.hands && (hands.state === 'ready' || hands.state === 'loading')) || tNow - handsSeenAt < 1.2;
+  const canHold = settings.hold && !handBusy && best.model && inside && steady && best.id !== city$.blocked && tNow - city$.townSince > COOLDOWN;
   if (!canHold) city$.dwellStart = tNow;
   city$.dwellP = canHold ? clamp((tNow - city$.dwellStart) / DWELL, 0, 1) : 0;
   setRing(best, city$.dwellP);
@@ -598,7 +662,8 @@ function markChips() {
 function updateDock() {
   const inB = city$.mode === 'building' || city$.mode === 'grow';
   $('#bldActions').hidden = !inB;
-  const hint = city$.mode === 'building' ? (settings.upright && sensor.ok ? tr('flipHint') : '') : city$.mode === 'town' && active ? tr('townHint') : '';
+  const townHint = settings.hands && hands.state === 'ready' ? tr('handHint') : settings.hands && hands.state === 'loading' ? tr('handLoading') : tr('townHint');
+  const hint = city$.mode === 'building' ? (settings.upright && sensor.ok ? tr('flipHint') : '') : city$.mode === 'town' && active ? townHint : '';
   $('#dockHint').textContent = hint;
   markChips();
 }
@@ -629,6 +694,7 @@ function resize() {
   renderer.setPixelRatio(dpr);
   renderer.setSize(glCanvas.clientWidth || window.innerWidth, glCanvas.clientHeight || window.innerHeight, false);
   dbgCanvas.width = glCanvas.width; dbgCanvas.height = glCanvas.height;
+  handCanvas.width = glCanvas.width; handCanvas.height = glCanvas.height;
   updateProjection();
 }
 function intrinsics() {
@@ -727,6 +793,7 @@ function onFrame(nowMs) {
   }
   lastRes = res;
   handleResult(res, t);
+  submitHands();
   if (videoTex) videoTex.needsUpdate = true;   // draw exactly the frame that was tracked
   const r0 = performance.now();
   render(t);
@@ -858,6 +925,120 @@ function setYaw(y, animate) {
   place.yawFrom = place.yaw; place.yawTo = place.yaw + d; place.yt0 = animate ? tn : tn - 10;
 }
 
+// ---------------- hands in the air: grab, slide and zoom the map ----------------
+// One hand: pinch (thumb + index) to grab the map where the fingers are and drag it; bring the hand closer to
+// the phone to zoom in, move it away to zoom out. Two hands pinching: stretch or squeeze the map between them.
+// A quick pinch that hardly moves is a tap: it opens the building under the fingers.
+const handCanvas = $('#handfx'), hctx = handCanvas.getContext('2d');
+let handsSeenAt = -10, handInject = null, injectN = 0, zoomBadgeAt = -10;
+const handSet = new HandSet();
+const hands = new HandEngine((st, info) => {
+  if (st === 'error') { console.warn('hand tracking:', info); toast(tr('handErr')); }
+  updateDock();
+});
+function startHands() { if (settings.hands && videoTex && !filmMode) hands.start(params.get('hands') === 'cpu' ? 'CPU' : 'GPU'); }   // ?hands=cpu for testing
+// one camera frame to the hand tracker (long side 512 px is plenty for its 192-224 px networks)
+function submitHands() {
+  if (!settings.hands || hands.state !== 'ready' || city$.mode !== 'town' || !active) return;
+  const vw = disp.width, vh = disp.height, k = 512 / Math.max(vw, vh);
+  hands.submit(disp, Math.round(vw * k), Math.round(vh * k), performance.now());
+}
+// hand landmarks (0..1 on the camera picture) -> CSS pixels on screen
+const toScreen = (nx, ny) => { const dpr = renderer.getPixelRatio(); return [((nx * view.vw - view.ox) * view.s) / dpr, ((ny * view.vh - view.oy) * view.s) / dpr]; };
+// where a point on the screen meets the map's ground, in the frame's millimetres (x, z)
+const hitV = new THREE.Vector3(), hitO = new THREE.Vector3(), hitInv = new THREE.Matrix4();
+function planeHit(p) {
+  const W = glCanvas.clientWidth, H = glCanvas.clientHeight;
+  hitV.set(p[0] / W * 2 - 1, 1 - p[1] / H * 2, 0.5).unproject(camera);
+  hitInv.copy(yawGroup.matrixWorld).invert();
+  hitO.set(0, 0, 0).applyMatrix4(hitInv);
+  hitV.applyMatrix4(hitInv).sub(hitO);
+  const y = townBaseY() + groundMap * townK();
+  if (Math.abs(hitV.y) < 1e-9) return null;
+  const s = (y - hitO.y) / hitV.y;
+  return s > 0 ? [hitO.x + hitV.x * s, hitO.z + hitV.z * s] : null;
+}
+const grip = { key: '', n: 0, g: [], z0: 1, s0: 1, d0: 0, t0: 0, start: [], moved: 0, zoomed: 0, lastP: null };
+function handsToMap(list, tn) {
+  const can = city$.mode === 'town' && active && townRoot;
+  const pinched = can ? list.filter(h => h.pinch && h.p).slice(0, 2) : [];
+  const key = pinched.map(h => h.id).join(',');
+  if (key !== grip.key) {
+    // a quick pinch that hardly moved is a tap on the dot under the fingers
+    if (grip.n === 1 && !pinched.length && tn - grip.t0 < 0.45 && grip.moved < 22 && grip.zoomed < 0.05 && grip.lastP) airTap(grip.lastP);
+    // the set of pinching hands changed: take hold again from where the map is now (no jump)
+    grip.key = key; grip.n = 0; grip.t0 = tn; grip.moved = 0; grip.zoomed = 0; grip.lastP = null;
+    const hits = pinched.map(h => planeHit(h.p));
+    if (pinched.length && hits.every(Boolean)) {
+      grip.n = pinched.length; grip.g = hits.map(p => localToMap(p[0], p[1]));
+      grip.z0 = mapView.z; grip.s0 = pinched[0].palm; grip.start = pinched.map(h => h.p.slice());
+      grip.d0 = grip.n === 2 ? Math.hypot(grip.g[0][0] - grip.g[1][0], grip.g[0][1] - grip.g[1][1]) : 0;
+      mapView.anim = null;
+    }
+  }
+  if (!grip.n) return;
+  const zBefore = mapView.z;
+  if (grip.n === 1) {
+    const h = pinched[0];
+    grip.lastP = h.p;
+    grip.moved = Math.max(grip.moved, Math.hypot(h.p[0] - grip.start[0][0], h.p[1] - grip.start[0][1]));
+    // the hand looks bigger when it comes closer: zoom in (a small dead zone keeps a plain drag from zooming)
+    const r = Math.log(h.palm / grip.s0), dead = 0.08;
+    mapView.z = clamp(grip.z0 * Math.exp(Math.sign(r) * Math.max(0, Math.abs(r) - dead) * 2.2), 1, ZMAX);
+    const P = planeHit(h.p);
+    if (P) { mapView.cx = grip.g[0][0] - P[0] / townK(); mapView.cz = grip.g[0][1] - P[1] / townK(); }
+  } else if (grip.d0 > 3) {
+    // two hands: the two grabbed points stay under the two pinches
+    for (let it = 0; it < 2; it++) {           // twice: the ground plane's height depends on the zoom
+      const P1 = planeHit(pinched[0].p), P2 = planeHit(pinched[1].p);
+      if (!P1 || !P2) break;
+      mapView.z = clamp(Math.hypot(P1[0] - P2[0], P1[1] - P2[1]) / (grip.d0 * townScale()), 1, ZMAX);
+      mapView.cx = (grip.g[0][0] + grip.g[1][0]) / 2 - (P1[0] + P2[0]) / 2 / townK();
+      mapView.cz = (grip.g[0][1] + grip.g[1][1]) / 2 - (P1[1] + P2[1]) / 2 / townK();
+    }
+  }
+  clampView(true);
+  grip.zoomed = Math.max(grip.zoomed, Math.abs(Math.log(mapView.z / grip.z0)));
+  if (Math.abs(Math.log(mapView.z / zBefore)) > 0.002) zoomBadgeAt = tn;
+}
+function airTap(p) {
+  const L = nearestPin(p[0], p[1], 44);
+  if (L) select(L.id);
+}
+function updateHands(tn) {
+  if (!settings.hands) { handSet.clear(); return []; }
+  const list = handSet.update(handInject || hands.latest, toScreen, tn);
+  if (list.length) handsSeenAt = tn;
+  handsToMap(list, tn);
+  return list;
+}
+// over the rendered town: the real hand (cut out of the camera picture) and the pinch cursors
+function drawHands(all) {
+  hctx.clearRect(0, 0, handCanvas.width, handCanvas.height);
+  const tn = now(), list = all.filter(h => tn - h.seen < 0.2);     // only hands in the latest readings
+  if (!list.length || filmSkipDraw) return;
+  const dpr = renderer.getPixelRatio();
+  if (active && townRoot && videoTex)
+    drawHandCutouts(hctx, list, null, (g, x0, y0, bw, bh) => g.drawImage(disp, x0 / view.s + view.ox, y0 / view.s + view.oy, bw / view.s, bh / view.s, 0, 0, bw, bh), dpr);
+  if (active && city$.mode === 'town') {
+    const two = grip.n === 2 ? list.filter(h => h.pinch).slice(0, 2) : [];
+    drawPinchCursors(hctx, list, dpr, '#2f7bff', two.length === 2 ? [two[0].p, two[1].p] : null);
+  }
+}
+// "whole map" button and the zoom badge
+let mapUiState = '';
+function updateMapUi(tn) {
+  const showReset = mapView.z > 1.02 && city$.mode === 'town' && !!active && !mapView.anim;
+  const badge = tn - zoomBadgeAt < 0.9 && city$.mode === 'town' && !!active;
+  const txt = mapView.z.toFixed(1).replace('.', getLang() === 'en' ? '.' : ',') + '×';
+  const key = `${showReset}|${badge}|${txt}`;
+  if (key === mapUiState) return;
+  mapUiState = key;
+  $('#btnMap').hidden = !showReset;
+  $('#zoomBadge').classList.toggle('show', badge);
+  $('#zoomBadge').textContent = txt;
+}
+
 // ---------------- render ----------------
 const ease = x => x < 0 ? 0 : x > 1 ? 1 : 1 - Math.pow(1 - x, 3);
 const sunV = new THREE.Vector3(), upW = new THREE.Vector3();
@@ -895,13 +1076,22 @@ function render(t = now()) {
     const sc = sun.shadow.camera;
     if (sc.right !== r) { sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r; sc.near = 1; sc.far = 2000; sc.updateProjectionMatrix(); }
   }
+  // the map window: hands slide and zoom it, the "whole map" button glides it back
+  const handList = updateHands(tn);
+  if (!grip.n && !mapView.anim) settleView();
+  stepView(tn);
+  applyTownSize();
+  updateWindowPlanes();
+  setZoomedLook(mapView.z > 1.001);
   if (filmSkipDraw) scene.updateMatrixWorld();     // showcase video, off-camera frames: keep the clock, skip the drawing
   else {
     renderer.clear();
     if (videoTex) renderer.render(bgScene, bgCam);
     renderer.render(scene, camera);
   }
+  drawHands(handList);
   updatePins(tn);
+  updateMapUi(tn);
   drawDebug();
 }
 
@@ -933,6 +1123,7 @@ function drawDebug() {
     `video ${view.vw}x${view.vh} ${view.mode || ''}  proc ${PROC}  fov ${settings.fov}°  markers ${lastRes.markers.length}`,
     p ? `${active}: n ${p.n}  rms ${p.rms.toFixed(2)} px  z ${p.t[2].toFixed(0)} mm  base ${T.cube.base}` : 'no pose',
     `mode ${city$.mode}  tilt sensor ${sensor.ok ? 'on' : 'off'}  town ${townInfo ? townInfo.tris.toLocaleString('en') : '-'} tris`,
+    `hands ${settings.hands ? hands.state : 'off'} ${hands.delegate}  ${hands.ms.toFixed(0)} ms  ${hands.rate.toFixed(0)}/s  seen ${handSet.hands.length}  zoom ${mapView.z.toFixed(2)}`,
   ];
   const lh = 16 * dpr, y0 = 64 * dpr + lh;
   dbg.fillStyle = 'rgba(0,0,0,0.55)'; dbg.fillRect(8, y0 - lh, Math.min(W - 16, 440 * dpr), lh * (lines.length + 0.6));
@@ -950,6 +1141,7 @@ $('#btnSettings').addEventListener('click', () => openSheet('sheetSettings'));
 $('#btnHelp').addEventListener('click', () => openSheet('sheetHelp'));
 $('#btnInfo').addEventListener('click', () => { updateInfo(); openSheet('sheetInfo'); });
 $('#btnBack').addEventListener('click', () => goBack());
+$('#btnMap').addEventListener('click', () => animateView(1, 0, 0));
 $('#btnTurn').addEventListener('click', () => { if (city$.mode === 'building') setBldYaw(city$.byawTo + Math.PI / 2); });
 $('#btnFace').addEventListener('click', () => { if (city$.mode === 'building') setBldYaw(cameraYawIn(yawGroup)); });
 function paintSettings() {
@@ -957,7 +1149,7 @@ function paintSettings() {
   for (const b of segV.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.v === settings.view));
   for (const b of seg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.v === settings.plinth));
   $('#rngTown').value = settings.town; $('#townVal').textContent = (+settings.town).toFixed(1) + '×';
-  $('#chkHold').checked = settings.hold; $('#chkUpright').checked = settings.upright; $('#chkShadow').checked = settings.shadows; $('#chkDebug').checked = settings.debug;
+  $('#chkHands').checked = settings.hands; $('#chkHold').checked = settings.hold; $('#chkUpright').checked = settings.upright; $('#chkShadow').checked = settings.shadows; $('#chkDebug').checked = settings.debug;
   $('#rngFov').value = settings.fov; $('#fovVal').textContent = settings.fov + '°';
 }
 function bindSettingsUI() {
@@ -965,6 +1157,11 @@ function bindSettingsUI() {
   $('#segPlinth').addEventListener('click', e => { const v = e.target.closest('button')?.dataset.v; if (!v) return; settings.plinth = v; saveSettings(); applyPlinthStyle(); paintSettings(); });
   $('#rngTown').addEventListener('input', e => { settings.town = +e.target.value; saveSettings(); applyTownSize(); paintSettings(); });
   $('#chkHold').addEventListener('change', e => { settings.hold = e.target.checked; saveSettings(); });
+  $('#chkHands').addEventListener('change', e => {
+    settings.hands = e.target.checked; saveSettings();
+    if (settings.hands) startHands(); else { hands.stop(); handSet.clear(); }
+    updateDock();
+  });
   $('#chkUpright').addEventListener('change', e => { settings.upright = e.target.checked; saveSettings(); updateDock(); });
   $('#chkShadow').addEventListener('change', e => { settings.shadows = e.target.checked; saveSettings(); });
   $('#chkDebug').addEventListener('change', e => { settings.debug = e.target.checked; saveSettings(); });
@@ -997,13 +1194,22 @@ window.__city = {
     const L = byId(id), wrap = await loadBuilding(L.model);
     if (!city$.from || city$.sel !== L) {
       bldGroup.clear(); bldGroup.add(wrap); city$.sel = L;
-      const k = townScale(), u = wrap.userData;
-      city$.from = { p: new THREE.Vector3(L.pos[0] * k, townBaseY() + L.ground * k, L.pos[2] * k), s: (L.hMap * k) / u.height, yaw: 0 };
+      const k = townK(), u = wrap.userData, [lx, lz] = mapToLocal(L.pos[0], L.pos[2]);
+      city$.from = { p: new THREE.Vector3(lx, townBaseY() + L.ground * k, lz), s: (L.hMap * k) / u.height, yaw: 0 };
       city$.to = { p: new THREE.Vector3(0, 0.05, 0), s: fitScale(u), yaw: cameraYawIn(yawGroup) };
     }
     city$.mode = 'frozen'; bldGroup.visible = true; applyGrow(a);
   },
   pins: () => [...pinEls].map(([id, el]) => ({ id, hidden: el.hidden, on: el.classList.contains('on'), tf: el.style.transform })),
+  // the map window and hands: tests can hand in tracker results ({hands:[{lm, wl, side}]}) instead of the camera's
+  mapView, grip, planeHit, toScreen, localToMap, mapToLocal,
+  mapToScreen(mx, mz) {                              // a map point (mm) on the ground plane -> CSS px
+    const [lx, lz] = mapToLocal(mx, mz);
+    const v = new THREE.Vector3(lx, townBaseY() + groundMap * townK(), lz).applyMatrix4(yawGroup.matrixWorld).project(camera);
+    return [(v.x + 1) / 2 * glCanvas.clientWidth, (1 - v.y) / 2 * glCanvas.clientHeight];
+  },
+  get hands() { return { state: hands.state, delegate: hands.delegate, ms: hands.ms, rate: hands.rate, list: handSet.hands }; },
+  injectHands(r) { handInject = r ? Object.assign({}, r, { id: 'inj' + (++injectN) }) : null; },
   // showcase video (tools/film): run without a camera. Each frame gets a picture (any canvas) and, when the
   // cube is in view, its pose (R row-major 3x3, t in mm, OpenCV camera axes); the rest is the normal app.
   film: {

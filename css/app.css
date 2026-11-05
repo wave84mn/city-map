@@ -25,6 +25,7 @@ a { color: var(--accent); }
 #cam { position: fixed; inset: 0; width: 100vw; height: 100dvh; object-fit: cover; z-index: -1; pointer-events: none; }
 #gl, #dbg { position: fixed; inset: 0; width: 100vw; height: 100dvh; display: block; }
 #dbg { pointer-events: none; }
+#handfx { position: fixed; inset: 0; width: 100vw; height: 100dvh; display: block; z-index: 5; pointer-events: none; }
 
 /* ---------- start screen ---------- */
 #start { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; justify-content: center; align-items: center;
@@ -185,3 +186,14 @@ input[type=range] { width: 46%; accent-color: var(--accent); }
 /* short screens: keep every item its full size and let the start screen scroll instead of squeezing */
 #start { justify-content: center; justify-content: safe center; }
 #start > * { flex-shrink: 0; }
+
+/* the map window: zoom badge and "whole map" */
+#zoomBadge { position: fixed; left: 50%; top: calc(64px + var(--safe-t)); transform: translate(-50%, -6px); z-index: 11; pointer-events: none;
+  padding: 6px 13px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); font-weight: 700; font-size: 15px;
+  font-variant-numeric: tabular-nums; opacity: 0; transition: opacity .2s, transform .2s; -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+#zoomBadge.show { opacity: 1; transform: translate(-50%, 0); }
+#btnMap { position: fixed; right: calc(14px + var(--safe-r)); top: calc(64px + var(--safe-t)); z-index: 11; display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 14px 8px 11px; font-size: 14px; background: var(--panel); border: 1px solid var(--line); color: var(--text);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+#btnMap svg { width: 18px; height: 18px; }
+#btnMap[hidden] { display: none; }

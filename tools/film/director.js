@@ -361,6 +361,10 @@ const segments = [
     } },
 ];
 
+// other scripts (tests) can bring their own segments: window.__filmSegments(helpers) -> [segments]
+const SEG = window.__filmSegments ? window.__filmSegments({ app, rig, mover, aimAt, pinWorld, caption, captions, uiAlpha, cubeState, cam, THREE,
+  DT, FPS, lerp, smooth, easeIO, span }) : segments;
+
 // ---------------- CSS transitions on the virtual clock ----------------
 const animT = new WeakMap();
 function stepAnimations() {
@@ -372,12 +376,13 @@ function stepAnimations() {
 
 let cur = -1, segT = 0;
 const film = {
-  segments: segments.map(s => ({ name: s.name, frames: Math.round(s.dur * FPS), capture: s.capture !== false })),
+  segments: SEG.map(s => ({ name: s.name, frames: Math.round(s.dur * FPS), capture: s.capture !== false })),
   async init() {
     await buildCube();
     performance.__setVT(T * 1000);
     await app.film.start(WW, WH);
     $('#fx-outro').style.display = 'none';
+    if (SEG !== segments) $('#fx-title').style.display = 'none';      // tests: no title
     caption(null, 0); uiAlpha(0);
     placeCube(); placeCamera(); R3.render(world, cam);
     await Promise.all([...document.images].map(im => im.decode().catch(() => {})));
@@ -385,8 +390,8 @@ const film = {
   },
   // one video frame of segment si, local frame i
   step(si, i, want = true) {
-    if (si !== cur) { cur = si; segT = 0; segments[si].enter?.(); }
-    const seg = segments[si];
+    if (si !== cur) { cur = si; segT = 0; SEG[si].enter?.(); }
+    const seg = SEG[si];
     const lt = i * DT;
     T += DT; performance.__setVT(T * 1000);
     const r = seg.update(lt) || {};

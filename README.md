@@ -9,6 +9,13 @@ Hold the printed AR cube in front of your phone and the town of Gusinje stands o
 ## How it plays
 - **Town on the cube.** The town is the 3D Gusinje jigsaw map (1:4500, ground ×2.5, landmarks ×2.5), about twice as wide as the cube by default (*Settings → Town size*). Its south edge turns towards you when the cube is first found. Whichever cube face points up carries the town (phone tilt sensor).
 - **Dots.** Gold dots are buildings with a detailed model; white dots are other landmarks (name only, model later).
+- **Hand in the air** (on by default; *Settings → Hand in the air*). Put the cube on a table, hold the phone in one hand and use the other in front of the camera, above the town:
+  - pinch (thumb + index) to take hold of the map where your fingers are, and drag it: the spot you grabbed stays under your fingers;
+  - while pinching, bring the hand closer to the phone to zoom in (up to 5×), move it away to zoom out;
+  - with the phone on a stand, pinch with both hands and stretch or squeeze the map between them;
+  - a quick pinch on a dot opens that building.
+  The town then shows in a frame where the whole map was (twice the cube's width): zoomed in you see part of the town, bigger, and the cut sides show earth. Past the town's edge the map gives a little and springs back. **Whole map** (top right) glides back to the whole town. Your real hand is drawn in front of the town (cut out of the camera picture along the tracked fingers), with a cursor between thumb and index finger that fills blue while you hold the map. While hand tracking is on, holding still does not choose a building (the phone is held still on purpose while the other hand works); the ring still names what is in the middle.
+  Tracking runs in a worker with MediaPipe Hand Landmarker (GPU where the phone allows, otherwise CPU); it loads about 19 MB the first time (`js/vendor/mediapipe`, `models/hand_landmarker.task`). `?hands=off` starts without it, `?hands=cpu` forces the CPU.
 - **Choosing.** The ring in the middle snaps to the nearest dot and shows its name. Hold the cube steady with a gold dot inside the ring for 1.4 s and the building is chosen. Holding only counts while the cube is still; there is a 2 s pause after the town appears, and the building you just left can't be chosen again until the ring has moved off it. You can also tap a dot or a name in the list at the bottom. *Settings → Choose by holding still* turns holding off.
 - **Building.** The town sinks into the cube while the building rises from its spot and grows to fill the cube, door towards you. Buttons: back to town, turn 90°, face me, about (names in all three languages and its jigsaw piece code; the short story comes later).
 - **Back.** Turn the cube upside down (two quarter-rolls within 2.5 s count too), or tap the back button. Turning it over during the grow reverses it.
@@ -43,6 +50,7 @@ Crkva sv. Antona is outside the map area (west, towards Grebaje), so it has no d
 - `print/qr/`: QR cards with the Xplore Prokletije logo in the middle and "Mapa Gusinja" below: `mapa-gusinja-qr-android.png` opens `…/city-map/?p=android`, `mapa-gusinja-qr-windows.png` opens `…/city-map/?p=windows` (error correction H; 300 dpi, about 14 × 18 cm, scale down freely; a 3 cm wide code still scans). Made by `tools/qr_cards.py` (segno).
 - On Android outside Chrome (a scanner app's built-in browser, Samsung Internet…) the start screen offers **Open in Chrome** (an intent link). On a computer, or with `?p=windows`, the start text talks about the computer's camera.
 - `js/vendor/three`: three.js r184 (MIT).
+- `js/hands.js` (hand tracker front end, pinch detection, drawing the hand and the cursor), `js/hand-worker.js` (MediaPipe in a module worker), `js/vendor/mediapipe/` (MediaPipe Tasks Vision 0.10.35, Apache 2.0; where the files come from and their hashes are in its README), `models/hand_landmarker.task` (MediaPipe Hand Landmarker, float16 v1).
 
 ## Adding a building
 1. Make the model with Gusinjska kocka's `tools/convert.py` and copy `<id>.json` and `<id>.jpg` into `models/`.
@@ -53,6 +61,7 @@ Run from a working folder that has ar-cube's `build/` (layout and face images, f
 - `seq.py still|flip|orbit OUT.y4m`: synthetic camera video of the cube (uses `synth.py` from ar-cube).
 - `e2e.cjs VIDEO.y4m OUT dwell|nohold|select|flip`: runs the app in Chromium with that video as the camera and a simulated tilt sensor: hold-to-choose, tapping a dot, the list + back button + language switch, and turning the cube upside down.
 - `frames.cjs VIDEO.y4m OUT <landmark>`: screenshots of the grow animation frozen at 0–100 %.
+- `film/test-hands.js`: the hand gestures with made-up hand readings, run in the film harness: `FILMSEG=tools/film/test-hands.js SHOTS="zoom:40,two:62" node tools/film/film.cjs OUT`. It checks that a grabbed point stays under the fingers while dragging and zooming, that the hand zooms by coming closer, two-hand stretching, the springy edge, a quick pinch opening a building and **Whole map**, and prints `RESULT PASS`.
 - `topview.html?cx=&cz=&w=` (with `topshot.cjs OUT.png cx cz w`): the map from above with a millimetre grid and the dots, for finding where a new landmark goes. In the app, `__city.probe(x, z)` gives the map height and jigsaw piece at a spot.
 Serve the folder first, e.g. `python3 -m http.server 8123`.
 

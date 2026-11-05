@@ -17,6 +17,7 @@
 <canvas id="gl"></canvas>
 <canvas id="dbg"></canvas>
 <div id="pins" aria-hidden="false"></div>
+<canvas id="handfx" aria-hidden="true"></canvas>
 
 <section id="start">
   <img class="brand" src="img/xplore-prokletije-dark.png" alt="Xplore Prokletije" width="1177" height="498" decoding="async">
@@ -55,6 +56,10 @@
 
 <div id="hint" class="off" hidden><div class="frame"></div><div id="hintText"></div></div>
 
+<!-- the map window: zoom level while it changes, and the way back to the whole town -->
+<div id="zoomBadge" aria-live="polite"></div>
+<button class="btn" id="btnMap" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg><span data-i18n="mapWhole"></span></button>
+
 <!-- aiming ring (town mode) -->
 <div id="ring" hidden>
   <svg viewBox="0 0 100 100" aria-hidden="true">
@@ -83,6 +88,8 @@
   <div class="row"><label data-i18n="language"></label>
     <div class="seg langseg"><button data-lang="me">ME</button><button data-lang="sq">SQ</button><button data-lang="en">EN</button></div></div>
   <div class="row"><label for="rngTown"><span data-i18n="townSize"></span><small><span id="townVal"></span> · <span data-i18n="townSizeSmall"></span></small></label><input type="range" id="rngTown" min="1.4" max="3.6" step="0.1"></div>
+  <div class="row"><label for="chkHands"><span data-i18n="handsSet"></span><small data-i18n="handsSetSmall"></small></label>
+    <span class="switch"><input type="checkbox" id="chkHands"><span></span></span></div>
   <div class="row"><label for="chkHold"><span data-i18n="holdSelect"></span><small data-i18n="holdSelectSmall"></small></label>
     <span class="switch"><input type="checkbox" id="chkHold"><span></span></span></div>
   <div class="row"><label for="chkUpright"><span data-i18n="upright"></span><small data-i18n="uprightSmall"></small></label>

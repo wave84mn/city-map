@@ -36,6 +36,7 @@ const server = http.createServer((req, res) => {
   await page.goto('http://localhost:8124/');
   await page.waitForFunction(() => window.__city && window.__city.townInfo, null, { timeout: 120000 });
   await page.addStyleTag({ path: path.join(__dirname, 'film.css') });
+  if (process.env.FILMSEG) await page.addScriptTag({ path: path.resolve(process.env.FILMSEG) });   // other segments (tests)
   await page.addScriptTag({ type: 'module', url: '/tools/film/director.js' });
   await page.waitForFunction(() => window.__film, null, { timeout: 60000 });
   await page.evaluate(() => window.__film.init());
