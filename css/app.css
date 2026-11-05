@@ -197,3 +197,10 @@ input[type=range] { width: 46%; accent-color: var(--accent); }
   -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
 #btnMap svg { width: 18px; height: 18px; }
 #btnMap[hidden] { display: none; }
+
+/* camera (lens) switch */
+#btnCam { position: relative; }
+#btnCam b { position: absolute; right: 3px; bottom: 2px; font-size: 11px; font-weight: 800; line-height: 1; }
+#btnCam[hidden] { display: none; }
+.linkbtn { appearance: none; border: 0; background: none; padding: 0 0 0 6px; color: var(--accent); font: inherit; font-weight: 650; cursor: pointer; }
+.linkbtn[hidden] { display: none; }

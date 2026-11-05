@@ -45,6 +45,10 @@
 <header id="hud" hidden>
   <div class="pill" id="status" aria-live="polite"><i class="dot"></i><span id="statusText"></span></div>
   <div class="icons">
+    <button class="ibtn" id="btnCam" hidden aria-label="Camera">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><path d="M9.5 12.5a3 3 0 0 1 5-1.5M14.5 14.5a3 3 0 0 1-5 1.2"/><path d="M14.7 9.6l.3 1.6-1.6.3M9.3 17.4l-.3-1.6 1.6-.3"/></svg>
+      <b id="camNo"></b>
+    </button>
     <button class="ibtn" id="btnHelp" aria-label="Help">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9.5"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1.1.9-1.1 1.6v.5"/><circle cx="12" cy="17" r=".6" fill="currentColor"/></svg>
     </button>
@@ -99,7 +103,7 @@
   <div class="row"><label for="chkShadow" data-i18n="shadows"></label><span class="switch"><input type="checkbox" id="chkShadow"><span></span></span></div>
   <div class="row"><label><span data-i18n="camView"></span><small data-i18n="camViewSmall"></small></label>
     <div class="seg" id="segView"><button data-v="auto" data-i18n="auto"></button><button data-v="fit" data-i18n="fit"></button><button data-v="fill" data-i18n="fill"></button></div></div>
-  <div class="row"><label for="rngFov"><span data-i18n="fov"></span><small id="fovVal">66°</small></label><input type="range" id="rngFov" min="50" max="85" step="1"></div>
+  <div class="row"><label for="rngFov"><span data-i18n="fov"></span><small><span id="fovVal">66°</span> <button class="linkbtn" id="btnFovAuto" data-i18n="fovAutoBtn" hidden></button></small></label><input type="range" id="rngFov" min="15" max="90" step="1"></div>
   <div class="row"><label for="chkDebug"><span data-i18n="debug"></span><small data-i18n="debugSmall"></small></label>
     <span class="switch"><input type="checkbox" id="chkDebug"><span></span></span></div>
 </section>

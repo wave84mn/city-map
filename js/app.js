@@ -8,10 +8,11 @@ import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Tracker, projectedBox } from './cv/tracker.js';
 import { OneEuro, matToQuat, mulv } from './cv/pose.js';
+import { estimateFov, median } from './cv/calib.js';
 import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 import { HandEngine, HandSet, drawHandCutouts, drawPinchCursors } from './hands.js';
 
-const VERSION = '0.7 · 5 Nov 2026';
+const VERSION = '0.7.1 · 5 Nov 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
@@ -21,10 +22,10 @@ const GROW = 1.35, SHRINK = 1.1, DWELL = 1.4, COOLDOWN = 2.0, FLIP_WINDOW = 2.5;
 const OPP = [5, 3, 4, 1, 2, 0];          // opposite face (top front right back left bottom)
 
 // ---------------- settings (per-viewer convenience only) ----------------
-const DEFAULTS = { plinth: 'stone', town: 2.0, hold: true, upright: true, shadows: true, debug: false, fov: 66, view: 'auto', hands: true };
+const DEFAULTS = { plinth: 'stone', town: 2.0, hold: true, upright: true, shadows: true, debug: false, fovFix: null, view: 'auto', hands: true, camId: '' };
 const settings = Object.assign({}, DEFAULTS, readStore('citymap.settings') || {});
 if (params.has('debug')) settings.debug = true;
-if (params.has('fov')) settings.fov = +params.get('fov');
+if (params.has('fov')) settings.fovFix = +params.get('fov');            // a fixed field of view (otherwise learned)
 if (params.get('hands') === 'off') settings.hands = false;           // tests (and anyone who wants the old way)
 function readStore(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } }
 function saveSettings() { try { localStorage.setItem('citymap.settings', JSON.stringify(settings)); } catch { /* private mode */ } }
@@ -55,7 +56,14 @@ const bgCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 let videoTex = null;
 const bgMat = new THREE.MeshBasicMaterial({ toneMapped: false, depthTest: false, depthWrite: false });
 const bgMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), bgMat);
-bgScene.add(bgMesh);
+// when the whole camera picture is shown with room around it, a soft dark copy of it fills that room
+const blurCanvas = document.createElement('canvas'), blurCtx = blurCanvas.getContext('2d');
+blurCanvas.width = 24; blurCanvas.height = 32;
+const blurTex = new THREE.CanvasTexture(blurCanvas);
+blurTex.colorSpace = THREE.SRGBColorSpace; blurTex.generateMipmaps = false; blurTex.minFilter = blurTex.magFilter = THREE.LinearFilter;
+const bgBlur = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ map: blurTex, color: 0x6f6f6f, toneMapped: false, depthTest: false, depthWrite: false }));
+bgBlur.visible = false; bgBlur.renderOrder = 0; bgMesh.renderOrder = 1;
+bgScene.add(bgBlur, bgMesh);
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 scene.environmentIntensity = 0.55;
@@ -121,10 +129,7 @@ async function start() {
   if (!navigator.mediaDevices?.getUserMedia) return fail(tr('errNoCam'));
   $('#go').disabled = true; $('#go').textContent = tr('starting');
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: false,
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } } });
-    video.srcObject = stream;
-    await video.play();
+    await openCamera(settings.camId || null);
   } catch (e) {
     $('#go').disabled = false; $('#go').textContent = tr('start');
     const name = e && e.name;
@@ -143,8 +148,124 @@ async function start() {
   runLoop();
   preloadBuildings();
   startHands();
+  await listCameras();
+  pickMainCamera();
 }
 function fail(msg) { const e = $('#err'); e.textContent = msg; e.style.display = 'block'; }
+
+// ---------------- camera: whole sensor picture, 1x zoom, the main back lens ----------------
+// Some phones give the browser a zoomed-in picture: a 16:9 crop of the sensor, a default zoom, or even the
+// telephoto lens. Ask for the sensor's own 4:3 shape at 1x, and let the person switch lenses (remembered).
+const cam = { stream: null, track: null, caps: {}, zoom: 1, label: '', list: [], devId: '' };
+async function openCamera(deviceId) {
+  if (cam.stream) for (const tr of cam.stream.getTracks()) tr.stop();
+  const v = { width: { ideal: 1440 }, height: { ideal: 1080 }, aspectRatio: { ideal: 4 / 3 }, frameRate: { ideal: 30 } };
+  if (deviceId) v.deviceId = { exact: deviceId }; else v.facingMode = { ideal: 'environment' };
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: v }); }
+  catch (e) {
+    if (!deviceId || e.name === 'NotAllowedError') throw e;
+    delete v.deviceId; v.facingMode = { ideal: 'environment' };          // the saved camera is gone: back to the default
+    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: v });
+  }
+  cam.stream = stream; cam.track = stream.getVideoTracks()[0];
+  cam.caps = cam.track.getCapabilities ? cam.track.getCapabilities() : {};
+  cam.label = cam.track.label || '';
+  cam.zoom = 1;
+  if (cam.caps.zoom) {
+    const want = clamp(1, cam.caps.zoom.min, cam.caps.zoom.max);
+    try { await cam.track.applyConstraints({ advanced: [{ zoom: want }] }); } catch { /* no zoom control */ }
+    cam.zoom = (cam.track.getSettings().zoom) || want;
+  }
+  if (cam.caps.focusMode && cam.caps.focusMode.includes('continuous')) {
+    try { await cam.track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); } catch { /* ignore */ }
+  }
+  cam.devId = (cam.track.getSettings && cam.track.getSettings().deviceId) || deviceId || '';
+  video.srcObject = stream;
+  await video.play();
+  fovReset();
+  if (lastFrameT) updateProjection();
+}
+const isBack = d => !/front|user|selfie|prednj|facing front/i.test(d.label || '');
+async function listCameras() {
+  try {
+    const all = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+    const back = all.filter(isBack);
+    cam.list = back.length ? back : all;
+  } catch { cam.list = []; }
+  paintCameraUI();
+}
+// Chrome on Android names the main back camera "camera2 0"; if it opened another lens by itself, use the main one
+async function pickMainCamera() {
+  if (settings.camId || cam.list.length < 2) return;
+  const main = cam.list.find(d => /camera2 0\b/.test(d.label || ''));
+  if (!main || main.deviceId === cam.devId) return;
+  try { await openCamera(main.deviceId); paintCameraUI(); } catch { /* keep what we have */ }
+}
+async function nextCamera() {
+  if (cam.list.length < 2) return;
+  const i = cam.list.findIndex(d => d.deviceId === cam.devId);
+  const d = cam.list[(i + 1) % cam.list.length];
+  settings.camId = d.deviceId; saveSettings();
+  try { await openCamera(d.deviceId); } catch { toast(tr('errOther', { m: 'camera' })); }
+  paintCameraUI();
+  toast(`${tr('camera')} ${cam.list.indexOf(d) + 1} / ${cam.list.length}`);
+}
+function paintCameraUI() {
+  const b = $('#btnCam');
+  b.hidden = cam.list.length < 2;
+  $('#camNo').textContent = String(Math.max(0, cam.list.findIndex(d => d.deviceId === cam.devId)) + 1);
+}
+$('#btnCam').addEventListener('click', nextCamera);
+
+// ---------------- field of view: learned from the cube ----------------
+// Two or more faces of the rigid cube in one picture fix the camera's field of view; the median of recent
+// estimates is used and saved per camera and picture size. A wrong field of view makes everything look too
+// close (or too far) and makes corner-on views of the cube fit badly.
+const FOV_KEY = 'citymap.fov';
+const fovS = { value: settings.fovFix || 66, source: settings.fovFix ? 'set' : 'default', samples: [], tick: 0, savedAt: 0, key: '' };
+function fovKey() { return `${cam.devId.slice(0, 12) || 'cam'}|${video.videoWidth}x${video.videoHeight}|z${(+cam.zoom).toFixed(2)}`; }
+function fovReset() { fovS.key = ''; }
+function fovLoad() {
+  const key = fovKey();
+  if (fovS.key === key) return;
+  fovS.key = key; fovS.samples = []; fovS.savedAt = 0;
+  if (settings.fovFix) { setFov(settings.fovFix, 'set'); return; }
+  try { const saved = JSON.parse(localStorage.getItem(FOV_KEY) || '{}'); if (saved[key]) { setFov(saved[key], 'saved'); return; } } catch { /* none */ }
+  setFov(66, 'default');
+}
+function setFov(fov, source) {
+  fovS.source = source;
+  if (Math.abs(fov - fovS.value) < 0.3) return;
+  const k = Math.tan(fovS.value * D2R / 2) / Math.tan(fov * D2R / 2);        // new focal length / old
+  fovS.value = fov;
+  for (const st of Object.values(T)) {
+    st.filtT.reset(); st.filtQ.reset(); st.prevQ = null;
+    if (st.raw) st.raw = Object.assign({}, st.raw, { t: st.raw.t.map(x => x * k) });
+    if (st.t) st.t = st.t.map(x => x * k);
+  }
+  updateProjection();
+}
+function learnFov(res, K) {
+  if (settings.fovFix) return;
+  const p = res.poses.cube;
+  if (!p || p.ambiguous || !p.faces || p.faces.length < 2 || p.n < 3) return;
+  if (fovS.tick++ % 3) return;
+  const tg = tracker.targets.cube;
+  const used = res.markers.filter(m => p.ids.includes(m.id));
+  const obj = used.flatMap(m => tg.markers.get(m.id).corners), img = used.flatMap(m => m.corners);
+  const e = estimateFov(p.R, p.t, Object.assign({ vw: video.videoWidth, vh: video.videoHeight }, K), obj, img);
+  if (!e) return;
+  fovS.samples.push(e.fov);
+  if (fovS.samples.length > 25) fovS.samples.shift();
+  if (fovS.samples.length >= 4) {
+    setFov(median(fovS.samples), 'learned');
+    if (fovS.samples.length >= 6 && fovS.samples.length - fovS.savedAt >= 5) {
+      fovS.savedAt = fovS.samples.length;
+      try { const saved = JSON.parse(localStorage.getItem(FOV_KEY) || '{}'); saved[fovS.key] = Math.round(fovS.value * 10) / 10; localStorage.setItem(FOV_KEY, JSON.stringify(saved)); } catch { /* storage off */ }
+    }
+  }
+}
 
 async function enableSensors() {
   try {
@@ -699,7 +820,7 @@ function resize() {
 }
 function intrinsics() {
   const vw = video.videoWidth, vh = video.videoHeight, L = Math.max(vw, vh);
-  const f = (L / 2) / Math.tan(settings.fov * D2R / 2);
+  const f = (L / 2) / Math.tan(fovS.value * D2R / 2);
   return { fx: f, fy: f, cx: vw / 2, cy: vh / 2 };
 }
 function updateProjection() {
@@ -719,6 +840,10 @@ function updateProjection() {
   camera.projectionMatrix.set(2 * fx / W, 0, 1 - 2 * cx / W, 0, 0, 2 * fy / H, 2 * cy / H - 1, 0, 0, 0, -(f + n) / (f - n), -2 * f * n / (f - n), 0, 0, -1, 0);
   camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
   bgMesh.scale.set(vw * s / W, vh * s / H, 1);
+  bgBlur.visible = vw * s < W - 2 || vh * s < H - 2;
+  bgBlur.scale.set(vw * sFill / W, vh * sFill / H, 1);
+  const bw = 24, bh = Math.max(8, Math.round(bw * vh / vw));
+  if (blurCanvas.width !== bw || blurCanvas.height !== bh) { blurCanvas.width = bw; blurCanvas.height = bh; blurTex.dispose(); }
 }
 
 // ---------------- main loop ----------------
@@ -766,6 +891,7 @@ function onFrame(nowMs) {
   const vw = video.videoWidth, vh = video.videoHeight;
   if (!vw || !tracker) return render(nowMs / 1000);
   if (vw !== view.vw || vh !== view.vh) updateProjection();
+  fovLoad();
   const t = nowMs / 1000;
   if (lastFrameT) fps = fps * 0.9 + 0.1 / Math.max(1e-3, t - lastFrameT);
   lastFrameT = t;
@@ -781,6 +907,7 @@ function onFrame(nowMs) {
   const img = pctx.getImageData(0, 0, w, h);
   const p2 = performance.now();
   const res = tracker.process(img.data, w, h, { x0: region.sx, y0: region.sy, scale: w / region.sw }, K, t, { radius: region.radius });
+  learnFov(res, K);
   const p3 = performance.now();
   procMs = procMs * 0.85 + 0.15 * (p3 - p0);
   timing.capture = timing.capture * 0.85 + 0.15 * (p1 - p0);
@@ -795,6 +922,7 @@ function onFrame(nowMs) {
   handleResult(res, t);
   submitHands();
   if (videoTex) videoTex.needsUpdate = true;   // draw exactly the frame that was tracked
+  if (bgBlur.visible && frameNo % 3 === 0) { blurCtx.drawImage(disp, 0, 0, blurCanvas.width, blurCanvas.height); blurTex.needsUpdate = true; }
   const r0 = performance.now();
   render(t);
   timing.render = timing.render * 0.85 + 0.15 * (performance.now() - r0);
@@ -1120,7 +1248,8 @@ function drawDebug() {
   const p = active && T[active].raw;
   const lines = [
     `fps ${fps.toFixed(0)}  track ${procMs.toFixed(1)} ms  draw ${timing.render.toFixed(1)} ms  ${region ? region.mode : ''}`,
-    `video ${view.vw}x${view.vh} ${view.mode || ''}  proc ${PROC}  fov ${settings.fov}°  markers ${lastRes.markers.length}`,
+    `video ${view.vw}x${view.vh} ${view.mode || ''}  proc ${PROC}  fov ${fovS.value.toFixed(1)}° ${fovS.source} (${fovS.samples.length})  markers ${lastRes.markers.length}`,
+    `camera ${cam.list.length ? cam.list.findIndex(d => d.deviceId === cam.devId) + 1 : '?'}/${cam.list.length}  "${(cam.label || '?').slice(0, 26)}"  zoom ${(+cam.zoom).toFixed(2)}${cam.caps.zoom ? ` (${cam.caps.zoom.min}-${cam.caps.zoom.max})` : ''}`,
     p ? `${active}: n ${p.n}  rms ${p.rms.toFixed(2)} px  z ${p.t[2].toFixed(0)} mm  base ${T.cube.base}` : 'no pose',
     `mode ${city$.mode}  tilt sensor ${sensor.ok ? 'on' : 'off'}  town ${townInfo ? townInfo.tris.toLocaleString('en') : '-'} tris`,
     `hands ${settings.hands ? hands.state : 'off'} ${hands.delegate}  ${hands.ms.toFixed(0)} ms  ${hands.rate.toFixed(0)}/s  seen ${handSet.hands.length}  zoom ${mapView.z.toFixed(2)}`,
@@ -1137,7 +1266,7 @@ function openSheet(id) {
   $('#scrim').classList.toggle('open', !!id);
 }
 $('#scrim').addEventListener('click', () => openSheet(null));
-$('#btnSettings').addEventListener('click', () => openSheet('sheetSettings'));
+$('#btnSettings').addEventListener('click', () => { paintSettings(); openSheet('sheetSettings'); });
 $('#btnHelp').addEventListener('click', () => openSheet('sheetHelp'));
 $('#btnInfo').addEventListener('click', () => { updateInfo(); openSheet('sheetInfo'); });
 $('#btnBack').addEventListener('click', () => goBack());
@@ -1150,7 +1279,9 @@ function paintSettings() {
   for (const b of seg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.v === settings.plinth));
   $('#rngTown').value = settings.town; $('#townVal').textContent = (+settings.town).toFixed(1) + '×';
   $('#chkHands').checked = settings.hands; $('#chkHold').checked = settings.hold; $('#chkUpright').checked = settings.upright; $('#chkShadow').checked = settings.shadows; $('#chkDebug').checked = settings.debug;
-  $('#rngFov').value = settings.fov; $('#fovVal').textContent = settings.fov + '°';
+  $('#rngFov').value = Math.round(fovS.value);
+  $('#fovVal').textContent = Math.round(fovS.value) + '° · ' + (settings.fovFix ? tr('fovSet') : tr('fovAuto'));
+  $('#btnFovAuto').hidden = !settings.fovFix;
 }
 function bindSettingsUI() {
   $('#segView').addEventListener('click', e => { const v = e.target.closest('button')?.dataset.v; if (!v) return; settings.view = v; saveSettings(); updateProjection(); paintSettings(); });
@@ -1165,7 +1296,8 @@ function bindSettingsUI() {
   $('#chkUpright').addEventListener('change', e => { settings.upright = e.target.checked; saveSettings(); updateDock(); });
   $('#chkShadow').addEventListener('change', e => { settings.shadows = e.target.checked; saveSettings(); });
   $('#chkDebug').addEventListener('change', e => { settings.debug = e.target.checked; saveSettings(); });
-  $('#rngFov').addEventListener('input', e => { settings.fov = +e.target.value; saveSettings(); updateProjection(); paintSettings(); });
+  $('#rngFov').addEventListener('input', e => { settings.fovFix = +e.target.value; saveSettings(); setFov(settings.fovFix, 'set'); paintSettings(); });
+  $('#btnFovAuto').addEventListener('click', () => { settings.fovFix = null; saveSettings(); fovReset(); fovLoad(); paintSettings(); });
   paintSettings();
 }
 let toastT = 0;
@@ -1203,6 +1335,8 @@ window.__city = {
   pins: () => [...pinEls].map(([id, el]) => ({ id, hidden: el.hidden, on: el.classList.contains('on'), tf: el.style.transform })),
   // the map window and hands: tests can hand in tracker results ({hands:[{lm, wl, side}]}) instead of the camera's
   mapView, grip, planeHit, toScreen, localToMap, mapToLocal,
+  get fov() { return { value: fovS.value, source: fovS.source, n: fovS.samples.length }; },
+  get cam() { return { label: cam.label, zoom: cam.zoom, n: cam.list.length, w: video.videoWidth, h: video.videoHeight }; },
   mapToScreen(mx, mz) {                              // a map point (mm) on the ground plane -> CSS px
     const [lx, lz] = mapToLocal(mx, mz);
     const v = new THREE.Vector3(lx, townBaseY() + groundMap * townK(), lz).applyMatrix4(yawGroup.matrixWorld).project(camera);

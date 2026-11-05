@@ -21,6 +21,8 @@ Hold the printed AR cube in front of your phone and the town of Gusinje stands o
 - **Back.** Turn the cube upside down (two quarter-rolls within 2.5 s count too), or tap the back button. Turning it over during the grow reverses it.
 - **Languages:** Montenegrin/Bosnian, Albanian, English (ME / SQ / EN). The first visit follows the phone's language.
 - Works with the printed 70 mm cube, the 60 mm paper cube or the flat paper card (same marker codes as ar-cube).
+- **Camera (v0.7.1).** Some phones hand the browser a zoomed-in picture (a 16:9 crop, a default zoom, or even the telephoto lens): everything then looks far too close and a hand next to the cube is out of the picture. The app asks for the sensor's own 4:3 picture at 1× zoom with continuous focus; on Android it moves to the main back camera ("camera2 0") if Chrome opened another lens; and when the phone has several back cameras a camera button (top right, with the lens number) switches lenses, remembered on the phone. When the whole 4:3 picture is shown with room around it, a soft dark copy of the picture fills that room.
+- **Field of view, learned.** When two or more faces of the cube are seen, the camera's field of view is worked out from how the rigid cube fits (from Gusinjska kocka, `js/cv/calib.js`); the median of recent estimates is used and saved per camera. *Settings → Camera angle* shows it and can fix it by hand ("back to automatic" undoes that); `?fov=` fixes it from the link. *Settings → Tracking details* shows the lens, zoom and field of view.
 - **Tracking tolerance:** a pose is accepted when its fit error is under 12 % of the markers' size on screen (3 % for a single marker), and the last pose is kept for 0.5 s through short gaps. A hand-folded paper cube is 1–2 mm off the ideal shape, which at 20 cm is 10–15 px; the old fixed limit (3.5–6 px) dropped the cube about a third of the time in the first phone test.
 - The map has a green base underneath (the jigsaw pieces have no undersides). Shadows are drawn only under a building, not under the town (faster).
 
@@ -58,7 +60,7 @@ Crkva sv. Antona is outside the map area (west, towards Grebaje), so it has no d
 
 ## Tests (tools/)
 Run from a working folder that has ar-cube's `build/` (layout and face images, from `layout.py`):
-- `seq.py still|flip|orbit OUT.y4m`: synthetic camera video of the cube (uses `synth.py` from ar-cube).
+- `seq.py still|flip|orbit OUT.y4m [--fov DEG]`: synthetic camera video of the cube (uses `synth.py` from ar-cube); `--fov 23` makes a telephoto-like camera (the app learns about 19.5° on a 720×1080 crop of it and puts the cube at 943 mm, true 945).
 - `e2e.cjs VIDEO.y4m OUT dwell|nohold|select|flip`: runs the app in Chromium with that video as the camera and a simulated tilt sensor: hold-to-choose, tapping a dot, the list + back button + language switch, and turning the cube upside down.
 - `frames.cjs VIDEO.y4m OUT <landmark>`: screenshots of the grow animation frozen at 0–100 %.
 - `film/test-hands.js`: the hand gestures with made-up hand readings, run in the film harness: `FILMSEG=tools/film/test-hands.js SHOTS="zoom:40,two:62" node tools/film/film.cjs OUT`. It checks that a grabbed point stays under the fingers while dragging and zooming, that the hand zooms by coming closer, two-hand stretching, the springy edge, a quick pinch opening a building and **Whole map**, and prints `RESULT PASS`.

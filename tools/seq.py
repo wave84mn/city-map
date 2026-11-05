@@ -1,5 +1,7 @@
 """Synthetic camera videos of the AR cube for the city-map tests (run from a folder with build/, see ar-cube).
-usage: python3 seq.py still|flip|orbit OUT.y4m [--size 720x1280] [--secs 12]
+usage: python3 seq.py still|flip|orbit OUT.y4m [--size 720x1280] [--secs 12] [--fov DEG]
+ --fov: the camera's field of view along the long side (default about 65 deg); e.g. 23 for a phone that gives the
+        browser its telephoto lens. The cube is moved back so it looks the same size.
  still: cube held still, top face tilted towards the camera.
  flip:  still, then at 7 s the cube is turned upside down (180 deg about the camera's x axis) in 1 s, then still.
  orbit: the cube slowly turns about its vertical axis.
@@ -20,7 +22,11 @@ def main():
     secs = float(sys.argv[sys.argv.index('--secs') + 1]) if '--secs' in sys.argv else 12
     fps = 30; N = int(secs * fps)
     rng = np.random.default_rng(5)
-    f = 0.78 * max(W, H); K = np.array([[f, 0, W / 2], [0, f, H / 2], [0, 0, 1]])
+    fov = float(sys.argv[sys.argv.index('--fov') + 1]) if '--fov' in sys.argv else None   # degrees along the long side
+    f0 = 0.78 * max(W, H)
+    f = (max(W, H) / 2) / math.tan(math.radians(fov) / 2) if fov else f0
+    K = np.array([[f, 0, W / 2], [0, f, H / 2], [0, 0, 1]])
+    zk = f / f0                      # a narrower camera sees the cube from further away at the same size on screen
     S = synth.S
     planes = [(synth.faces_tex[i], np.array(fc['U'], float), np.array(fc['V'], float), np.array(fc['N'], float),
                np.array(fc['N'], float) * S / 2, S / 2, synth.FACE_PPMM) for i, fc in enumerate(synth.lay['faces'])]
@@ -28,7 +34,7 @@ def main():
     tmp = tempfile.mkdtemp()
     for i in range(N):
         tt = i / fps
-        a, yaw, z, ty = math.radians(38), math.radians(28), 300.0, 30.0
+        a, yaw, z, ty = math.radians(38), math.radians(28), 300.0 * zk, 30.0 * zk
         if kind == 'flip' and tt >= 7.0:
             s = min(1.0, (tt - 7.0) / 1.0); s = s * s * (3 - 2 * s)
             a += math.pi * s
