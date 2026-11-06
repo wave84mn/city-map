@@ -221,3 +221,6 @@ input[type=range] { width: 46%; accent-color: var(--accent); }
   font: 10px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; text-overflow: ellipsis;
   pointer-events: auto; cursor: pointer; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
 #dbgText[hidden] { display: none; }
+
+/* fingers on the map zoom and slide it: the page itself must not scroll or zoom there */
+#gl, #pins .pin, #handfx { touch-action: none; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }

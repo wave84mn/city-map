@@ -13,7 +13,7 @@ import { estimateFov, median } from './cv/calib.js';
 import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 import { HandEngine, HandSet, drawHandCutouts, drawPinchCursors } from './hands.js';
 
-const VERSION = '0.9 · 6 Nov 2026';
+const VERSION = '0.10 · 6 Nov 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
@@ -28,11 +28,11 @@ const settings = Object.assign({}, DEFAULTS, readStore('citymap.settings') || {}
 // v0.9: the town's default grew from 2.0x to 2.8x the cube's width (twice the area); phones that saved the
 // old default move to the new one, a size someone picked by hand stays
 if (settings.townV !== 2) { if (Math.abs(settings.town - 2.0) < 0.05) settings.town = DEFAULTS.town; settings.townV = 2; }
-if (params.has('debug')) settings.debug = true;
+settings.debug = params.has('debug');          // tracking details are never remembered: ?debug, or the switch for this visit
 if (params.has('fov')) settings.fovFix = +params.get('fov');            // a fixed field of view (otherwise learned)
 if (params.get('hands') === 'off') settings.hands = false;           // tests (and anyone who wants the old way)
 function readStore(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } }
-function saveSettings() { try { localStorage.setItem('citymap.settings', JSON.stringify(settings)); } catch { /* private mode */ } }
+function saveSettings() { try { const { debug, ...keep } = settings; localStorage.setItem('citymap.settings', JSON.stringify(keep)); } catch { /* private mode */ } }
 
 // ---------------- DOM ----------------
 const video = $('#cam'), glCanvas = $('#gl'), dbgCanvas = $('#dbg');
@@ -385,13 +385,29 @@ async function keepAwake() { try { wakeLock = await navigator.wakeLock?.request(
 // iPhone Safari pauses the camera video now and then (a call, Control Centre, another tab), and phones stop
 // the camera when the page goes to the background. A picture that hasn't changed for 1.5 s is restarted,
 // and if that needs a tap, the screen says so.
+// A page that was only busy (a slow phone drawing, a building loading) is not a stuck camera: the check skips
+// a late tick, and the camera counts as stuck only if its video is paused, ended or not moving on two checks
+// in a row. Video moving but no frames reaching the app: the frame loop is restarted quietly.
 let stalled = false;
 function watchCamera() {
+  let lastTick = 0, lastCT = -1, badTicks = 0;
   setInterval(() => {
-    if (!video.srcObject || document.visibilityState !== 'visible' || filmMode) return;
-    const quiet = performance.now() - lastVideoFrameAt;
-    if (quiet > 1500 && !stalled) { stalled = true; $('#stall').hidden = false; resumeCamera(); }
-    else if (quiet < 600 && stalled) { stalled = false; $('#stall').hidden = true; }
+    const tn = performance.now(), late = lastTick && tn - lastTick > 1000;
+    lastTick = tn;
+    if (!video.srcObject || document.visibilityState !== 'visible' || filmMode) { badTicks = 0; return; }
+    const ct = video.currentTime, moving = ct !== lastCT;
+    lastCT = ct;
+    const quiet = tn - lastVideoFrameAt;
+    if (late || quiet < 1500) {
+      badTicks = 0;
+      if (stalled && quiet < 1000) { stalled = false; $('#stall').hidden = true; }    // frames flow again
+      return;
+    }
+    const stuck = video.paused || video.readyState < 2 || !moving || cam.ended || (cam.track && cam.track.readyState === 'ended');
+    if (!stuck) { badTicks = 0; runLoop(); lastVideoFrameAt = tn - 900; return; }
+    if (++badTicks < 2) return;
+    if (!stalled) { stalled = true; $('#stall').hidden = false; }
+    resumeCamera();
   }, 500);
 }
 let resuming = false;
@@ -885,7 +901,7 @@ function updatePins(tNow) {
   // with hand tracking on, holding still doesn't choose: the phone is held still on purpose while the other hand
   // works the map, and the hand chooses by a quick pinch instead (the ring still names what's in the middle)
   const handBusy = (settings.hands && (hands.state === 'ready' || hands.state === 'loading')) || tNow - handsSeenAt < 1.2;
-  const canHold = settings.hold && !handBusy && best.model && inside && steady && best.id !== city$.blocked && tNow - city$.townSince > COOLDOWN;
+  const canHold = settings.hold && !handBusy && !touch.pts.size && best.model && inside && steady && best.id !== city$.blocked && tNow - city$.townSince > COOLDOWN;
   if (!canHold) city$.dwellStart = tNow;
   city$.dwellP = canHold ? clamp((tNow - city$.dwellStart) / DWELL, 0, 1) : 0;
   setRing(best, city$.dwellP);
@@ -1385,7 +1401,7 @@ function planeHit(p) {
 }
 const grip = { key: '', n: 0, g: [], z0: 1, s0: 1, d0: 0, t0: 0, start: [], moved: 0, zoomed: 0, lastP: null };
 function handsToMap(list, tn) {
-  const can = city$.mode === 'town' && active && townRoot;
+  const can = city$.mode === 'town' && active && townRoot && !touch.n;
   const pinched = can ? list.filter(h => h.pinch && h.p).slice(0, 2) : [];
   const key = pinched.map(h => h.id).join(',');
   if (key !== grip.key) {
@@ -1426,6 +1442,87 @@ function handsToMap(list, tn) {
   grip.zoomed = Math.max(grip.zoomed, Math.abs(Math.log(mapView.z / grip.z0)));
   if (Math.abs(Math.log(mapView.z / zBefore)) > 0.002) zoomBadgeAt = tn;
 }
+// ---------------- fingers on the screen: two fingers zoom the map, one finger slides it ----------------
+// Like a map app on the phone: the points of the map you touched stay under your fingers. On a computer the
+// mouse drags and the wheel zooms. A drag or a pinch never counts as a tap on a dot.
+const touch = { pts: new Map(), start: new Map(), n: 0, g: [], d0: 0, moved: 0, noClickUntil: 0 };
+const TOUCH_SKIP = 'header, #dock, .sheet, #scrim, #stall, #dbgText, #btnMap, #start, .toast, a, input, label, select, button:not(.pin)';
+const touchCan = () => city$.mode === 'town' && !!active && !!townRoot;
+function touchGrip() {
+  const list = [...touch.pts.values()].slice(0, 2);
+  touch.n = 0;
+  if (!list.length || !touchCan()) return;
+  const hits = list.map(p => planeHit(p));
+  if (!hits.every(Boolean)) return;
+  touch.n = list.length;
+  touch.g = hits.map(h => localToMap(h[0], h[1]));
+  touch.d0 = touch.n === 2 ? Math.hypot(touch.g[0][0] - touch.g[1][0], touch.g[0][1] - touch.g[1][1]) : 0;
+  mapView.anim = null;
+  grip.key = ''; grip.n = 0;                                  // a hand in the air lets go
+}
+function touchFollow() {
+  if (!touch.n || !touchCan()) return;
+  const list = [...touch.pts.values()].slice(0, 2);
+  if (list.length !== touch.n) return;
+  const zBefore = mapView.z;
+  if (touch.n === 1) {
+    const P = planeHit(list[0]);
+    if (P) { mapView.cx = touch.g[0][0] - P[0] / townK(); mapView.cz = touch.g[0][1] - P[1] / townK(); }
+  } else if (touch.d0 > 2) {
+    for (let it = 0; it < 2; it++) {                          // twice: the ground plane's height depends on the zoom
+      const P1 = planeHit(list[0]), P2 = planeHit(list[1]);
+      if (!P1 || !P2) break;
+      mapView.z = clamp(Math.hypot(P1[0] - P2[0], P1[1] - P2[1]) / (touch.d0 * townScale()), 1, ZMAX);
+      mapView.cx = (touch.g[0][0] + touch.g[1][0]) / 2 - (P1[0] + P2[0]) / 2 / townK();
+      mapView.cz = (touch.g[0][1] + touch.g[1][1]) / 2 - (P1[1] + P2[1]) / 2 / townK();
+    }
+  }
+  clampView(true);
+  if (Math.abs(Math.log(mapView.z / zBefore)) > 0.002) zoomBadgeAt = now();
+}
+window.addEventListener('pointerdown', e => {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  if (!touchCan() || (e.target.closest && e.target.closest(TOUCH_SKIP))) return;
+  touch.pts.set(e.pointerId, [e.clientX, e.clientY]);
+  touch.start.set(e.pointerId, [e.clientX, e.clientY]);
+  touch.moved = touch.pts.size > 1 ? 99 : 0;                  // a pinch is never a tap
+  touchGrip();
+}, true);
+window.addEventListener('pointermove', e => {
+  if (!touch.pts.has(e.pointerId)) return;
+  touch.pts.set(e.pointerId, [e.clientX, e.clientY]);
+  const s0 = touch.start.get(e.pointerId);
+  touch.moved = Math.max(touch.moved, Math.hypot(e.clientX - s0[0], e.clientY - s0[1]));
+  touchFollow();
+}, true);
+const touchEnd = e => {
+  if (!touch.pts.has(e.pointerId)) return;
+  touch.pts.delete(e.pointerId); touch.start.delete(e.pointerId);
+  if (touch.moved > 10) touch.noClickUntil = performance.now() + 450;
+  touchGrip();                                                // the other finger keeps hold from where the map is
+};
+window.addEventListener('pointerup', touchEnd, true);
+window.addEventListener('pointercancel', touchEnd, true);
+// a drag that ended on a dot is not a tap on it
+$('#pins').addEventListener('click', e => { if (performance.now() < touch.noClickUntil) { e.stopPropagation(); e.preventDefault(); } }, true);
+// the page itself must not scroll or zoom under the fingers (Safari's own pinch included)
+window.addEventListener('touchmove', e => { if (touch.pts.size) e.preventDefault(); }, { passive: false });
+for (const ev of ['gesturestart', 'gesturechange']) document.addEventListener(ev, e => { if (videoTex) e.preventDefault(); });
+// computer: the wheel zooms around the mouse
+window.addEventListener('wheel', e => {
+  if (!touchCan() || (e.target.closest && e.target.closest(TOUCH_SKIP))) return;
+  const P0 = planeHit([e.clientX, e.clientY]);
+  if (!P0) return;
+  e.preventDefault();
+  const g = localToMap(P0[0], P0[1]);
+  mapView.anim = null;
+  mapView.z = clamp(mapView.z * Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0016)), 1, ZMAX);
+  const P = planeHit([e.clientX, e.clientY]);
+  if (P) { mapView.cx = g[0] - P[0] / townK(); mapView.cz = g[1] - P[1] / townK(); }
+  clampView(false);
+  zoomBadgeAt = now();
+}, { passive: false });
+
 function airTap(p) {
   const L = nearestPin(p[0], p[1], 44);
   if (L) select(L.id);
@@ -1503,7 +1600,7 @@ function render(t = now()) {
   }
   // the map window: hands slide and zoom it, the "whole map" button glides it back
   const handList = updateHands(tn);
-  if (!grip.n && !mapView.anim) settleView();
+  if (!grip.n && !touch.n && !mapView.anim) settleView();
   stepView(tn);
   applyTownSize();
   updateWindowPlanes();
