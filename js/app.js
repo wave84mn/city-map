@@ -13,7 +13,7 @@ import { estimateFov, median } from './cv/calib.js';
 import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 import { HandEngine, HandSet, drawHandCutouts, drawPinchCursors } from './hands.js';
 
-const VERSION = '0.8.1 · 6 Nov 2026';
+const VERSION = '0.9 · 6 Nov 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
@@ -23,8 +23,11 @@ const GROW = 1.35, SHRINK = 1.1, DWELL = 1.4, COOLDOWN = 2.0, FLIP_WINDOW = 2.5;
 const OPP = [5, 3, 4, 1, 2, 0];          // opposite face (top front right back left bottom)
 
 // ---------------- settings (per-viewer convenience only) ----------------
-const DEFAULTS = { plinth: 'stone', town: 2.0, hold: true, upright: true, shadows: true, debug: false, fovFix: null, view: 'auto', hands: true, camId: '', camManual: false };
+const DEFAULTS = { plinth: 'stone', town: 2.8, hold: true, upright: true, shadows: true, debug: false, fovFix: null, view: 'auto', hands: true, camId: '', camManual: false };
 const settings = Object.assign({}, DEFAULTS, readStore('citymap.settings') || {});
+// v0.9: the town's default grew from 2.0x to 2.8x the cube's width (twice the area); phones that saved the
+// old default move to the new one, a size someone picked by hand stays
+if (settings.townV !== 2) { if (Math.abs(settings.town - 2.0) < 0.05) settings.town = DEFAULTS.town; settings.townV = 2; }
 if (params.has('debug')) settings.debug = true;
 if (params.has('fov')) settings.fovFix = +params.get('fov');            // a fixed field of view (otherwise learned)
 if (params.get('hands') === 'off') settings.hands = false;           // tests (and anyone who wants the old way)
