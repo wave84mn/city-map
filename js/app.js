@@ -2,17 +2,18 @@
 // Camera -> marker tracking (from ar-cube) -> three.js: the town of Gusinje stands on the cube.
 // Aim the centre ring at a landmark and hold still (or tap its dot / its name) and the building
 // rises out of the map and grows until it fills the cube. Turn the cube upside down to go back.
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import * as THREE from './vendor/three/three.module.min.js';
+import { GLTFLoader } from './vendor/three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from './vendor/three/addons/libs/meshopt_decoder.module.js';
+import { RoomEnvironment } from './vendor/three/addons/environments/RoomEnvironment.js';
 import { Tracker, projectedBox } from './cv/tracker.js';
+import { CvDetector, loadOpenCv } from './cv/cvdetect.js';
 import { OneEuro, matToQuat, mulv } from './cv/pose.js';
 import { estimateFov, median } from './cv/calib.js';
 import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 import { HandEngine, HandSet, drawHandCutouts, drawPinchCursors } from './hands.js';
 
-const VERSION = '0.7.2 · 5 Nov 2026';
+const VERSION = '0.8 · 6 Nov 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
@@ -35,8 +36,12 @@ const video = $('#cam'), glCanvas = $('#gl'), dbgCanvas = $('#dbg');
 const dbg = dbgCanvas.getContext('2d');
 const proc = document.createElement('canvas');
 const pctx = proc.getContext('2d', { willReadFrequently: true });
-const disp = document.createElement('canvas');          // the exact frame that is tracked is the frame that is shown
-const dctx = disp.getContext('2d', { alpha: false });
+// the exact frame that is tracked is the frame that is shown: `cap` holds the frame being tracked, `disp` the one
+// on screen; they swap when its pose arrives
+let disp = document.createElement('canvas');
+let dctx = disp.getContext('2d', { alpha: false });
+let cap = document.createElement('canvas');
+let cctx = cap.getContext('2d', { alpha: false });
 $('#ver').textContent = 'v' + VERSION;
 
 // ---------------- three.js ----------------
@@ -126,7 +131,7 @@ async function start() {
   const err = $('#err');
   err.style.display = 'none';
   const sensorP = enableSensors();          // must run inside the tap (iOS permission prompt)
-  if (!navigator.mediaDevices?.getUserMedia) return fail(tr('errNoCam'));
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) return fail(tr('errNoCam'));
   $('#go').disabled = true; $('#go').textContent = tr('starting');
   try {
     const saved = settings.camId && (settings.camManual || lensFov(settings.camId) >= LENS_MIN) ? settings.camId : null;
@@ -148,7 +153,7 @@ async function start() {
   updateDock();
   runLoop();
   preloadBuildings();
-  startHands();
+  watchCamera();
   await listCameras();
   pickMainCamera();
 }
@@ -182,8 +187,12 @@ async function openCamera(deviceId) {
     try { await cam.track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); } catch { /* ignore */ }
   }
   cam.devId = (cam.track.getSettings && cam.track.getSettings().deviceId) || deviceId || '';
+  video.muted = true; video.playsInline = true;
+  video.setAttribute('playsinline', ''); video.setAttribute('muted', '');
   video.srcObject = stream;
-  await video.play();
+  try { await video.play(); } catch (e) { if (e && e.name !== 'AbortError') throw e; }
+  cam.track.addEventListener('ended', () => { cam.ended = true; });
+  cam.ended = false;
   fovReset();
   if (lastFrameT) updateProjection();
 }
@@ -220,7 +229,7 @@ function lensOrder() { return cam.list.slice().sort((a, b) => (/camera2 0\b/.tes
 async function useCamera(id, why) {
   if (lens.switching) return;
   lens.switching = true;
-  try { await openCamera(id); } catch { lens.fail.add(id); }
+  try { await openCamera(id); runLoop(); } catch { lens.fail.add(id); }
   lens.switching = false;
   lens.since = now();
   paintCameraUI();
@@ -368,7 +377,51 @@ async function enableSensors() {
 
 let wakeLock = null;
 async function keepAwake() { try { wakeLock = await navigator.wakeLock?.request('screen'); } catch { /* optional */ } }
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && video.srcObject) keepAwake(); });
+
+// ---------------- keeping the camera alive ----------------
+// iPhone Safari pauses the camera video now and then (a call, Control Centre, another tab), and phones stop
+// the camera when the page goes to the background. A picture that hasn't changed for 1.5 s is restarted,
+// and if that needs a tap, the screen says so.
+let stalled = false;
+function watchCamera() {
+  setInterval(() => {
+    if (!video.srcObject || document.visibilityState !== 'visible' || filmMode) return;
+    const quiet = performance.now() - lastVideoFrameAt;
+    if (quiet > 1500 && !stalled) { stalled = true; $('#stall').hidden = false; resumeCamera(); }
+    else if (quiet < 600 && stalled) { stalled = false; $('#stall').hidden = true; }
+  }, 500);
+}
+let resuming = false;
+async function resumeCamera() {
+  if (resuming) return;
+  resuming = true;
+  try {
+    if (cam.ended || !cam.track || cam.track.readyState === 'ended') await openCamera(cam.devId || null);
+    else if (video.paused) await video.play();
+    lastVideoFrameAt = performance.now() - 900;      // give it a moment before the next try
+    runLoop();
+  } catch (e) { console.warn('camera resume:', e && e.message); }
+  resuming = false;
+}
+document.addEventListener('pointerdown', () => { if (stalled) resumeCamera(); }, true);
+$('#stall').addEventListener('click', () => resumeCamera());
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !video.srcObject) return;
+  keepAwake();
+  resumeCamera();
+});
+window.addEventListener('pageshow', e => { if (e.persisted && video.srcObject) resumeCamera(); });
+
+// the phone can take the 3D drawing away under memory pressure (iPhone Safari does this first);
+// three.js restores it, and the hand tracker is switched off to make room
+let glLost = false, glLostTimer = 0;
+glCanvas.addEventListener('webglcontextlost', e => {
+  e.preventDefault(); glLost = true;
+  if (hands.state === 'ready' || hands.state === 'loading') { hands.stop(); handSet.clear(); }
+  clearTimeout(glLostTimer);
+  glLostTimer = setTimeout(() => { if (glLost) toast(tr('glLost')); }, 2500);
+});
+glCanvas.addEventListener('webglcontextrestored', () => { glLost = false; clearTimeout(glLostTimer); if (videoTex) videoTex.needsUpdate = true; });
 
 // world-up direction in OpenCV camera coordinates (x right, y down, z forward), from the tilt sensor
 function upInCamera() {
@@ -392,6 +445,8 @@ if (/Android/i.test(UA) && !inChrome) {
   $('#openChrome').href = intent;
   $('#chromeBox').hidden = false;
 }
+const isIOS = /iPhone|iPad|iPod/i.test(UA) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(UA));
+if (isIOS && /FBAN|FBAV|FB_IAB|Instagram|LinkedInApp|Line\/|Twitter|Snapchat|musical_ly|TikTok|BytedanceWebview|GSA\/|Messenger|WhatsApp|Viber/i.test(UA)) $('#safariBox').hidden = false;
 if (params.get('p') === 'windows' || (!isMobile && params.get('p') !== 'android')) { const l = document.querySelector('#start .lead'); if (l) l.dataset.i18n = 'leadPc'; }
 
 // ---------------- data ----------------
@@ -415,6 +470,7 @@ async function init() {
     const [lay, c] = await Promise.all([fetch('data/layout.json').then(r => r.json()), fetch('data/city.json').then(r => r.json())]);
     layout = lay; S = layout.edge; city = c;
     tracker = new Tracker(layout);
+    startEngine();
     buildPlinth();
     buildChips();
     const gltf = await loader.loadAsync(city.town.file);
@@ -933,15 +989,35 @@ function updateProjection() {
 }
 
 // ---------------- main loop ----------------
+// One step per new camera frame: requestVideoFrameCallback where it works. If it delivers nothing for about
+// 1.5 s while the video has pictures (seen on some Safari versions), poll with requestAnimationFrame instead.
+let loopGen = 0, loopKind = '', lastVideoFrameAt = 0;
 function runLoop() {
-  if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
-    const cb = n => { try { onFrame(n); } catch (e) { console.error(e); } video.requestVideoFrameCallback(cb); };
-    video.requestVideoFrameCallback(cb);
-  } else {
-    let last = -1;
-    const raf = n => { if (video.currentTime !== last) { last = video.currentTime; try { onFrame(n); } catch (e) { console.error(e); } } requestAnimationFrame(raf); };
+  const gen = ++loopGen;
+  const step = n => { lastVideoFrameAt = performance.now(); try { onFrame(n); } catch (e) { eng.lastErr = String(e && e.message || e); console.error(e); } };
+  const polling = () => {
+    loopKind = 'raf';
+    let last = -1, lastAt = 0;
+    const raf = n => {
+      if (gen !== loopGen) return;
+      // some browsers do not advance currentTime for a live camera: then take a frame every ~1/30 s
+      if (video.readyState >= 2 && (video.currentTime !== last || n - lastAt > 33)) { last = video.currentTime; lastAt = n; step(n); }
+      requestAnimationFrame(raf);
+    };
     requestAnimationFrame(raf);
-  }
+  };
+  if (!('requestVideoFrameCallback' in HTMLVideoElement.prototype) || params.get('loop') === 'raf') { polling(); return; }
+  loopKind = 'rvfc';
+  let got = 0, ticks = 0;
+  const cb = n => { if (gen !== loopGen || loopKind !== 'rvfc') return; got++; step(n); video.requestVideoFrameCallback(cb); };
+  video.requestVideoFrameCallback(cb);
+  const watch = () => {
+    if (gen !== loopGen || got) return;
+    if (video.readyState >= 2) ticks++;
+    if (ticks > 90) { polling(); return; }
+    requestAnimationFrame(watch);
+  };
+  requestAnimationFrame(watch);
 }
 
 let PROC = 640;                      // processing size (long side), adapted to the phone's speed
@@ -959,59 +1035,179 @@ function chooseRegion(K, t) {
     if (x1 - x0 < 32 || y1 - y0 < 32) continue;
     const cellNative = tg.cell * K.fx / Math.max(50, st.raw.t[2]);
     const scale = Math.min(1, PROC / Math.max(x1 - x0, y1 - y0), 10 / cellNative);
-    return { sx: x0, sy: y0, sw: x1 - x0, sh: y1 - y0, scale, radius: clamp(Math.round(cellNative * scale), 2, 7), mode: key };
+    return { sx: x0, sy: y0, sw: x1 - x0, sh: y1 - y0, scale, radius: clamp(Math.round(cellNative * scale), 2, 7), mode: key, det: 'track' };
   }
-  if (frameNo % 2 === 0) {
+  if (frameNo % 2 === 0 || eng.kind !== 'own') {
+    // OpenCV looks at the whole picture every time; the own detector alternates with a sharper centre crop
     const scale = PROC / L;
-    return { sx: 0, sy: 0, sw: vw, sh: vh, scale, radius: [2, 3, 5][(frameNo >> 1) % 3], mode: 'search' };
+    return { sx: 0, sy: 0, sw: vw, sh: vh, scale, radius: [2, 3, 5][(frameNo >> 1) % 3], mode: 'search', det: 'search' };
   }
   const cw = Math.round(vw / 2), ch = Math.round(vh / 2);
   const scale = Math.min(1, PROC / Math.max(cw, ch));
-  return { sx: Math.round((vw - cw) / 2), sy: Math.round((vh - ch) / 2), sw: cw, sh: ch, scale, radius: [3, 5][(frameNo >> 1) % 2], mode: 'centre' };
+  return { sx: Math.round((vw - cw) / 2), sy: Math.round((vh - ch) / 2), sw: cw, sh: ch, scale, radius: [3, 5][(frameNo >> 1) % 2], mode: 'centre', det: 'search' };
 }
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+
+// ---------------- the tracking engine ----------------
+// 'worker': OpenCV's ArUco detector and the pose solver run in a background worker (the default).
+// 'main':   OpenCV on the page, if a worker can't run it.   'own': the app's own JavaScript detector.
+// The own detector runs on the page from the first frame until OpenCV is ready, and stays if OpenCV fails.
+// ?det=own keeps the own detector, ?worker=off runs OpenCV on the page (for comparison and testing).
+const CV_URL = new URL('./vendor/opencv/opencv.js', import.meta.url).href;
+const ENGINE_PREF = params.get('det') === 'own' ? 'own' : params.get('worker') === 'off' ? 'main' : 'worker';
+const eng = { kind: 'own', cv: ENGINE_PREF === 'own' ? 'off' : 'waiting', worker: null, busy: false, sentAt: 0, inflight: null,
+  newFrame: 0, errors: 0, err: '', lastErr: '', loadMs: 0, wMs: 0, readMs: 0, n: 0, latency: 0 };
+function startEngine() {
+  if (ENGINE_PREF === 'own' || eng.cv !== 'waiting') return;
+  if (ENGINE_PREF === 'worker' && typeof Worker !== 'undefined') {
+    try {
+      const w = new Worker(new URL('./cv/worker.js', import.meta.url), { type: 'module' });
+      eng.worker = w; eng.cv = 'loading';
+      w.onmessage = onEngineMsg;
+      w.onerror = e => { if (e && e.preventDefault) e.preventDefault(); engineFail('worker ' + ((e && e.message) || 'error')); };
+      w.postMessage({ type: 'init', layout, cvUrl: CV_URL, useCv: true });
+      return;
+    } catch (e) { eng.err = 'worker ' + (e.message || e); }
+  }
+  startMainCv();
+}
+function startMainCv() {
+  eng.cv = 'loading';
+  const t0 = performance.now();
+  loadOpenCv(CV_URL).then(cv => {
+    tracker.setDetector(new CvDetector(cv, tracker.ids));
+    eng.kind = 'main'; eng.cv = 'ready'; eng.loadMs = Math.round(performance.now() - t0); PROC = 640;
+  }).catch(e => { eng.cv = 'failed'; eng.err = String((e && e.message) || e); console.warn('OpenCV:', eng.err); });
+}
+// the worker broke: carry on with OpenCV (or the own detector) on the page
+function engineFail(why) {
+  console.warn('tracking worker:', why);
+  eng.err = why;
+  if (eng.worker) { try { eng.worker.terminate(); } catch { /* gone */ } eng.worker = null; }
+  eng.busy = false; eng.inflight = null;
+  if (eng.kind === 'worker') eng.kind = 'own';
+  if (eng.cv !== 'ready' || eng.kind === 'own') startMainCv();
+}
+function onEngineMsg(e) {
+  const m = e.data;
+  if (m.type === 'state') {
+    if (m.cv === 'ready') { eng.kind = 'worker'; eng.cv = 'ready'; eng.loadMs = m.loadMs; PROC = 640; }
+    else if (m.cv === 'failed') engineFail('opencv ' + m.err);
+    else eng.cv = m.cv;
+    return;
+  }
+  if (!eng.inflight || m.id !== eng.inflight.id) return;          // a frame from before a reset
+  if (m.type === 'error') {
+    eng.busy = false; eng.inflight = null; eng.lastErr = m.err;
+    if (++eng.errors > 5) engineFail('frames ' + m.err);
+    return;
+  }
+  eng.errors = 0;
+  try { onTracked(m.res); } catch (err) { eng.lastErr = String(err && err.message || err); console.error(err); }
+}
 
 let region = null;
 function onFrame(nowMs) {
   frameNo++;
-  const vw = video.videoWidth, vh = video.videoHeight;
+  const vw = video.videoWidth;
   if (!vw || !tracker) return render(nowMs / 1000);
+  if (eng.kind === 'worker' && eng.worker) {
+    eng.newFrame = nowMs;
+    if (!eng.busy) sendFrame();
+    else if (performance.now() - eng.sentAt > 2500) engineFail('no answer');
+    return;
+  }
+  trackHere(nowMs);
+}
+
+// read the newest camera frame: the whole picture into `cap` (to show later), the region to track as pixels
+function grabFrame(t) {
+  const vw = video.videoWidth, vh = video.videoHeight;
   if (vw !== view.vw || vh !== view.vh) updateProjection();
   fovLoad();
-  const t = nowMs / 1000;
   if (lastFrameT) fps = fps * 0.9 + 0.1 / Math.max(1e-3, t - lastFrameT);
   lastFrameT = t;
   const K = intrinsics();
-  region = chooseRegion(K, t);
-  const w = Math.max(16, Math.round(region.sw * region.scale)), h = Math.max(16, Math.round(region.sh * region.scale));
+  const rg = chooseRegion(K, t);
+  const w = Math.max(16, Math.round(rg.sw * rg.scale)), h = Math.max(16, Math.round(rg.sh * rg.scale));
   if (proc.width !== w || proc.height !== h) { proc.width = w; proc.height = h; }
+  if (cap.width !== vw || cap.height !== vh) { cap.width = vw; cap.height = vh; }
   const p0 = performance.now();
-  if (disp.width !== vw || disp.height !== vh) { disp.width = vw; disp.height = vh; }
-  dctx.drawImage(video, 0, 0, vw, vh);
+  cctx.drawImage(video, 0, 0, vw, vh);
   const p1 = performance.now();
-  pctx.drawImage(disp, region.sx, region.sy, region.sw, region.sh, 0, 0, w, h);
+  pctx.drawImage(cap, rg.sx, rg.sy, rg.sw, rg.sh, 0, 0, w, h);
   const img = pctx.getImageData(0, 0, w, h);
   const p2 = performance.now();
-  const res = tracker.process(img.data, w, h, { x0: region.sx, y0: region.sy, scale: w / region.sw }, K, t, { radius: region.radius });
-  learnFov(res, K);
-  if (lens.searching && frameNo % 15 === 0) checkLens();
-  const p3 = performance.now();
-  procMs = procMs * 0.85 + 0.15 * (p3 - p0);
   timing.capture = timing.capture * 0.85 + 0.15 * (p1 - p0);
   timing.read = timing.read * 0.85 + 0.15 * (p2 - p1);
+  return { t, K, rg, img, w, h, roi: { x0: rg.sx, y0: rg.sy, scale: w / rg.sw }, hint: { radius: rg.radius, mode: rg.det }, p0 };
+}
+
+// tracking in the background worker: one frame at a time, always the newest one
+function sendFrame() {
+  const t = eng.newFrame / 1000;
+  eng.newFrame = 0;
+  if (!video.videoWidth) return;
+  const f = grabFrame(t);
+  f.id = ++eng.n;
+  eng.inflight = f; eng.busy = true; eng.sentAt = performance.now();
+  const buf = f.img.data.buffer; f.img = null;
+  eng.worker.postMessage({ type: 'frame', id: f.id, buf, w: f.w, h: f.h, roi: f.roi, K: f.K, time: t, hint: f.hint }, [buf]);
+}
+function onTracked(res) {
+  const f = eng.inflight;
+  eng.inflight = null; eng.busy = false;
+  const now0 = performance.now();
+  eng.latency = eng.latency * 0.85 + 0.15 * (now0 - f.p0);
+  eng.wMs = eng.wMs * 0.85 + 0.15 * res.stats.totalMs;
+  // the field of view may have been corrected while this frame was away: rescale its distances to match
+  const k = intrinsics().fx / f.K.fx;
+  if (Math.abs(k - 1) > 1e-6) for (const p of Object.values(res.poses)) p.t = p.t.map(x => x * k);
+  else learnFov(res, f.K);
+  if (frameNo % 15 === 0) {
+    if (eng.wMs > 45 && PROC > 400) PROC = Math.round(PROC * 0.85);
+    else if (eng.wMs < 24 && PROC < 640) PROC = Math.min(640, Math.round(PROC * 1.1));
+  }
+  // show the frame that was just tracked
+  [disp, cap] = [cap, disp]; [dctx, cctx] = [cctx, dctx];
+  if (videoTex) videoTex.image = disp;
+  procMs = procMs * 0.85 + 0.15 * (timing.read + res.stats.totalMs);
+  timing.track = timing.track * 0.85 + 0.15 * res.stats.totalMs;
+  // the next frame goes to the worker before this one is drawn, so tracking and drawing overlap
+  afterTracking(res, f, () => { if (eng.newFrame && eng.worker && eng.kind === 'worker') sendFrame(); });
+}
+
+// tracking on the page (own detector, or OpenCV when no worker can run it)
+function trackHere(nowMs) {
+  const f = grabFrame(nowMs / 1000);
+  const p2 = performance.now();
+  const res = tracker.process(f.img.data, f.w, f.h, f.roi, f.K, f.t, f.hint);
+  res.stats.detector = tracker.detector === tracker.own ? 'own' : 'opencv';
+  learnFov(res, f.K);
+  const p3 = performance.now();
   timing.track = timing.track * 0.85 + 0.15 * (p3 - p2);
+  procMs = procMs * 0.85 + 0.15 * (p3 - f.p0);
+  eng.latency = eng.latency * 0.85 + 0.15 * (p3 - f.p0);
   const cvMs = timing.read + timing.track;
   if (frameNo % 15 === 0) {
     if (cvMs > 30 && PROC > 400) PROC = Math.round(PROC * 0.85);
     else if (cvMs < 14 && PROC < 640) PROC = Math.min(640, Math.round(PROC * 1.1));
   }
-  lastRes = res;
-  handleResult(res, t);
+  [disp, cap] = [cap, disp]; [dctx, cctx] = [cctx, dctx];
+  if (videoTex) videoTex.image = disp;
+  afterTracking(res, f);
+}
+
+function afterTracking(res, f, beforeDraw) {
+  if (lens.searching && frameNo % 15 === 0) checkLens();
+  lastRes = res; region = f.rg;
+  handleResult(res, f.t);
   submitHands();
+  if (beforeDraw) beforeDraw();
   if (videoTex) videoTex.needsUpdate = true;   // draw exactly the frame that was tracked
   if (bgBlur.visible && frameNo % 3 === 0) { blurCtx.drawImage(disp, 0, 0, blurCanvas.width, blurCanvas.height); blurTex.needsUpdate = true; }
   const r0 = performance.now();
-  render(t);
+  render(f.t);
   timing.render = timing.render * 0.85 + 0.15 * (performance.now() - r0);
 }
 
@@ -1057,6 +1253,7 @@ function handleResult(res, t) {
     a.matrixWorldNeedsUpdate = true;
   }
   if (active === 'cube') updateBase(T.cube, t);
+  maybeStartHands(t);
   if (active && place.needFace && townRoot) { faceCamera(false); place.needFace = false; }
   updateStatus(t);
 }
@@ -1151,7 +1348,17 @@ const hands = new HandEngine((st, info) => {
   if (st === 'error') { console.warn('hand tracking:', info); toast(tr('handErr')); }
   updateDock();
 });
-function startHands() { if (settings.hands && videoTex && !filmMode) hands.start(params.get('hands') === 'cpu' ? 'CPU' : 'GPU'); }   // ?hands=cpu for testing
+function startHands() { if (settings.hands && videoTex && !filmMode && !glLost) hands.start(params.get('hands') === 'cpu' ? 'CPU' : 'GPU'); }
+// the hand tracker is big (about 19 MB and a second GPU context): start it once the cube has been found and
+// OpenCV is settled, so the camera, the cube and the town come first
+let handsArmed = false, cubeSeenAt = 0;
+function maybeStartHands(t) {
+  if (handsArmed || !settings.hands || !active) return;
+  if (!cubeSeenAt) cubeSeenAt = t;
+  if (t - cubeSeenAt < 1.5 || eng.cv === 'loading' || eng.cv === 'waiting') return;
+  handsArmed = true;
+  startHands();
+}   // ?hands=cpu for testing
 // one camera frame to the hand tracker (long side 512 px is plenty for its 192-224 px networks)
 function submitHands() {
   if (!settings.hands || hands.state !== 'ready' || city$.mode !== 'town' || !active) return;
@@ -1339,6 +1546,8 @@ function drawDebug() {
     `camera ${cam.list.length ? cam.list.findIndex(d => d.deviceId === cam.devId) + 1 : '?'}/${cam.list.length}  "${(cam.label || '?').slice(0, 26)}"  zoom ${(+cam.zoom).toFixed(2)}${cam.caps.zoom ? ` (${cam.caps.zoom.min}-${cam.caps.zoom.max})` : ''}`,
     p ? `${active}: n ${p.n}  rms ${p.rms.toFixed(2)} px  z ${p.t[2].toFixed(0)} mm  base ${T.cube.base}` : 'no pose',
     `mode ${city$.mode}  tilt sensor ${sensor.ok ? 'on' : 'off'}  town ${townInfo ? townInfo.tris.toLocaleString('en') : '-'} tris`,
+    `det ${eng.kind}  cv ${eng.cv}${eng.loadMs ? ' ' + (eng.loadMs / 1000).toFixed(1) + 's' : ''}  ${eng.kind === 'worker' ? 'bg ' + eng.wMs.toFixed(0) + 'ms  ' : ''}delay ${eng.latency.toFixed(0)}ms  ${loopKind}${video.paused ? '  PAUSED' : ''}`,
+    ...(eng.err || eng.lastErr ? [`! ${(eng.err || eng.lastErr).slice(0, 60)}`] : []),
     `hands ${settings.hands ? hands.state : 'off'} ${hands.delegate}  ${hands.ms.toFixed(0)} ms  ${hands.rate.toFixed(0)}/s  seen ${handSet.hands.length}  zoom ${mapView.z.toFixed(2)}`,
   ];
   const lh = 16 * dpr, y0 = 64 * dpr + lh;
@@ -1394,6 +1603,7 @@ function toast(msg) { const el = $('#toast'); el.textContent = msg; el.classList
 window.__city = {
   T, place, settings, view, timing, city$, sensor,
   get active() { return active; }, get lastRes() { return lastRes; }, get fps() { return fps; }, get procMs() { return procMs; },
+  get eng() { return { kind: eng.kind, cv: eng.cv, err: eng.err, lastErr: eng.lastErr, loadMs: eng.loadMs, wMs: eng.wMs, latency: eng.latency, n: eng.n, PROC, loop: loopKind, readMs: timing.read, trackMs: timing.track, renderMs: timing.render }; },
   get townInfo() { return townInfo; }, get landmarks() { return city && city.landmarks; }, get townRoot() { return townRoot; },
   select, goBack, setLang: l => { setLang(l); onLangChange(); },
   // tools: height of the map and the jigsaw piece at (x, z) in map millimetres

@@ -25,7 +25,9 @@ export class Tracker {
         cell: layout.card.cell, outline: [[-h, 0, -h], [h, 0, -h], [h, 0, h], [-h, 0, h]] };
     }
     const codes = [...layout.markers, ...(layout.card ? layout.card.markers : [])].map(m => ({ id: m.id, cells: m.cells }));
-    this.detector = new MarkerDetector(codes, opts.detector || {});
+    this.ids = codes.map(c => c.id);
+    this.own = new MarkerDetector(codes, opts.detector || {});   // the game's own detector
+    this.detector = this.own;                                     // replaced by OpenCV's when it has loaded
     this.prev = {};
     this.frame = 0;
   }
@@ -37,7 +39,7 @@ export class Tracker {
     this.frame++;
     const radii = [2, 3, 5];
     const radius = hint.radius ?? radii[this.frame % radii.length];
-    const det = this.detector.detect(rgba, w, h, { radius });
+    const det = this.detector.detect(rgba, w, h, { radius, mode: hint.mode, scale: roi.scale });
     const t1 = now();
     const markers = det.map(m => ({ id: m.id, hamming: m.hamming, refined: !!m.refined,
       corners: m.corners.map(p => [roi.x0 + p.x / roi.scale, roi.y0 + p.y / roi.scale]) }));
@@ -49,8 +51,11 @@ export class Tracker {
       const p = this._solve(tg, mine, K, this.prev[key] && time - this.prev[key].time < 0.5 ? this.prev[key] : null);
       if (p) { p.time = time; poses[key] = p; this.prev[key] = p; }
     }
-    return { markers, poses, stats: { detectMs: t1 - t0, totalMs: now() - t0, radius, candidates: this.detector.stats.candidates } };
+    return { markers, poses, stats: { detectMs: t1 - t0, totalMs: now() - t0, radius, candidates: (this.detector.stats || {}).candidates } };
   }
+
+  // Use another detector with the same detect() interface (OpenCV's); null goes back to the game's own.
+  setDetector(d) { this.detector = d || this.own; }
 
   _solve(tg, mine, K, prior) {
     let groups = mine.map(m => ({ id: m.id, face: tg.markers.get(m.id).face, obj: tg.markers.get(m.id).corners, img: m.corners }));
