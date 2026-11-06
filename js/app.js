@@ -13,7 +13,7 @@ import { estimateFov, median } from './cv/calib.js';
 import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 import { HandEngine, HandSet, drawHandCutouts, drawPinchCursors } from './hands.js';
 
-const VERSION = '0.8 · 6 Nov 2026';
+const VERSION = '0.8.1 · 6 Nov 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
@@ -1525,35 +1525,53 @@ function updateStatus(t) {
   else { pill.classList.remove('ok'); if (t - hintTimer > 1.2) hint.classList.remove('off'); }
   if (active !== lastActive) { lastActive = active; updateStatusText(); }
 }
+// Tracking details (Settings → Tracking details, or ?debug): marker outlines on the picture, and a small text
+// box under the top bar. Tap the box to shrink it to one line (remembered on this phone).
+const dbgText = $('#dbgText');
+let dbgSmall = false, dbgTextAt = 0;
+try { dbgSmall = localStorage.getItem('citymap.dbgSmall') === '1'; } catch { /* private mode */ }
+dbgText.addEventListener('click', () => {
+  dbgSmall = !dbgSmall; dbgTextAt = 0;
+  try { localStorage.setItem('citymap.dbgSmall', dbgSmall ? '1' : '0'); } catch { /* private mode */ }
+});
 function drawDebug() {
   const W = dbgCanvas.width, H = dbgCanvas.height;
   dbg.clearRect(0, 0, W, H);
-  if (!settings.debug || !lastRes) return;
+  if (!settings.debug || !lastRes) { if (!dbgText.hidden) dbgText.hidden = true; return; }
   const s = view.s, ox = view.ox, oy = view.oy, map = p => [(p[0] - ox) * s, (p[1] - oy) * s];
-  const dpr = window.devicePixelRatio || 1;
-  dbg.lineWidth = 2 * dpr;
-  dbg.font = `${12 * dpr}px ui-monospace, monospace`;
+  const k = W / Math.max(1, dbgCanvas.clientWidth || window.innerWidth);   // canvas pixels per CSS pixel
+  dbg.lineWidth = 2 * k;
+  dbg.font = `${11 * k}px ui-monospace, monospace`;
   for (const m of lastRes.markers) {
     const c = m.corners.map(map);
     dbg.strokeStyle = m.refined ? '#6fcf97' : '#f2c94c';
     dbg.beginPath(); dbg.moveTo(c[0][0], c[0][1]); for (let i = 1; i < 4; i++) dbg.lineTo(c[i][0], c[i][1]); dbg.closePath(); dbg.stroke();
     dbg.fillStyle = '#fff'; dbg.fillText(String(m.id), (c[0][0] + c[2][0]) / 2, (c[0][1] + c[2][1]) / 2);
   }
+  // the text box changes 5 times a second at most
+  const tNow = performance.now();
+  if (tNow - dbgTextAt < 200) return;
+  dbgTextAt = tNow;
   const p = active && T[active].raw;
-  const lines = [
-    `fps ${fps.toFixed(0)}  track ${procMs.toFixed(1)} ms  draw ${timing.render.toFixed(1)} ms  ${region ? region.mode : ''}`,
-    `video ${view.vw}x${view.vh} ${view.mode || ''}  proc ${PROC}  fov ${fovS.value.toFixed(1)}° ${fovS.source} (${fovS.samples.length})  markers ${lastRes.markers.length}`,
-    `camera ${cam.list.length ? cam.list.findIndex(d => d.deviceId === cam.devId) + 1 : '?'}/${cam.list.length}  "${(cam.label || '?').slice(0, 26)}"  zoom ${(+cam.zoom).toFixed(2)}${cam.caps.zoom ? ` (${cam.caps.zoom.min}-${cam.caps.zoom.max})` : ''}`,
-    p ? `${active}: n ${p.n}  rms ${p.rms.toFixed(2)} px  z ${p.t[2].toFixed(0)} mm  base ${T.cube.base}` : 'no pose',
-    `mode ${city$.mode}  tilt sensor ${sensor.ok ? 'on' : 'off'}  town ${townInfo ? townInfo.tris.toLocaleString('en') : '-'} tris`,
-    `det ${eng.kind}  cv ${eng.cv}${eng.loadMs ? ' ' + (eng.loadMs / 1000).toFixed(1) + 's' : ''}  ${eng.kind === 'worker' ? 'bg ' + eng.wMs.toFixed(0) + 'ms  ' : ''}delay ${eng.latency.toFixed(0)}ms  ${loopKind}${video.paused ? '  PAUSED' : ''}`,
-    ...(eng.err || eng.lastErr ? [`! ${(eng.err || eng.lastErr).slice(0, 60)}`] : []),
-    `hands ${settings.hands ? hands.state : 'off'} ${hands.delegate}  ${hands.ms.toFixed(0)} ms  ${hands.rate.toFixed(0)}/s  seen ${handSet.hands.length}  zoom ${mapView.z.toFixed(2)}`,
-  ];
-  const lh = 16 * dpr, y0 = 64 * dpr + lh;
-  dbg.fillStyle = 'rgba(0,0,0,0.55)'; dbg.fillRect(8, y0 - lh, Math.min(W - 16, 440 * dpr), lh * (lines.length + 0.6));
-  dbg.fillStyle = '#fff';
-  lines.forEach((l, i) => dbg.fillText(l, 16, y0 + i * lh));
+  const pose = p ? `${active} n ${p.n}  rms ${p.rms.toFixed(1)}px  ${p.t[2].toFixed(0)}mm  base ${T.cube.base}` : 'no cube';
+  const det = `det ${eng.kind}  cv ${eng.cv}${eng.loadMs ? ' ' + (eng.loadMs / 1000).toFixed(1) + 's' : ''}`;
+  let text;
+  if (dbgSmall) text = `fps ${fps.toFixed(0)} · ${det} · ${pose} ▾`;
+  else {
+    const camNo = cam.list.length ? cam.list.findIndex(d => d.deviceId === cam.devId) + 1 : '?';
+    text = [
+      `fps ${fps.toFixed(0)}  track ${procMs.toFixed(0)}ms  draw ${timing.render.toFixed(0)}ms  ${region ? region.mode : ''}  ▴`,
+      `${pose}  markers ${lastRes.markers.length}`,
+      `${det}  ${eng.kind === 'worker' ? 'bg ' + eng.wMs.toFixed(0) + 'ms  ' : ''}delay ${eng.latency.toFixed(0)}ms  ${loopKind}${video.paused ? '  PAUSED' : ''}`,
+      ...(eng.err || eng.lastErr ? [`! ${(eng.err || eng.lastErr).slice(0, 52)}`] : []),
+      `video ${view.vw}x${view.vh} ${view.mode || ''}  proc ${PROC}  fov ${fovS.value.toFixed(1)}° ${fovS.source}`,
+      `cam ${camNo}/${cam.list.length} "${(cam.label || '?').slice(0, 22)}"  zoom ${(+cam.zoom).toFixed(1)}${cam.caps.zoom ? ` (${cam.caps.zoom.min}-${cam.caps.zoom.max})` : ''}`,
+      `mode ${city$.mode}  tilt ${sensor.ok ? 'on' : 'off'}  town ${townInfo ? Math.round(townInfo.tris / 1000) + 'k' : '-'} tris`,
+      `hands ${settings.hands ? hands.state : 'off'} ${hands.delegate}  ${hands.ms.toFixed(0)}ms  ${hands.rate.toFixed(0)}/s  seen ${handSet.hands.length}  zoom ${mapView.z.toFixed(1)}`,
+    ].join('\n');
+  }
+  if (dbgText.textContent !== text) dbgText.textContent = text;
+  if (dbgText.hidden) dbgText.hidden = false;
 }
 
 // ---------------- UI ----------------

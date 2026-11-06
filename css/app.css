@@ -213,3 +213,11 @@ input[type=range] { width: 46%; accent-color: var(--accent); }
   padding: 16px 20px; border: 0; border-radius: 16px; background: rgba(14, 15, 18, 0.86); color: #fff; font: inherit; font-size: 16px;
   line-height: 1.35; text-align: center; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
 #stall[hidden] { display: none; }
+
+/* tracking details: small box under the top bar, tap to shrink it to one line */
+#dbgText { position: fixed; z-index: 9; left: calc(8px + var(--safe-l)); top: calc(66px + var(--safe-t));
+  max-width: min(400px, calc(100vw - 16px - var(--safe-l) - var(--safe-r))); margin: 0; padding: 5px 8px; overflow: hidden;
+  border-radius: 8px; background: rgba(0, 0, 0, 0.42); color: rgba(255, 255, 255, 0.92);
+  font: 10px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; text-overflow: ellipsis;
+  pointer-events: auto; cursor: pointer; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+#dbgText[hidden] { display: none; }
