@@ -93,15 +93,17 @@
    "id": "balica",
    "piece": "E3",
    "name": {
-    "me": "Balića kuća",
-    "en": "Balić House",
-    "sq": "Shtëpia e Baliqëve"
+    "me": "Kuća Radončića – Balića",
+    "en": "Radončić–Balić House",
+    "sq": "Shtëpia e Radonçiqëve – Baliqëve"
    },
    "pos": [
     23.1,
     14.0,
     -41.5
-   ]
+   ],
+   "model": "kuca-radoncica-balica",
+   "note": "Renamed from Balića kuća at the user's request (7 Nov 2026). Model rebuilt from the user's RealityScan point cloud."
   },
   {
    "id": "sahat",

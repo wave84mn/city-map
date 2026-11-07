@@ -287,6 +287,7 @@ function kindOf(L) {
   if (/opstina/.test(m)) return 'hall';
   if (/^sv-|crkva/.test(m)) return 'church';
   if (/kula/.test(m)) return 'tower';
+  if (/kuca/.test(m)) return 'house';
   return 'pin';
 }
 function drawIcon(g, kind, w) {
@@ -315,6 +316,12 @@ function drawIcon(g, kind, w) {
   } else if (kind === 'hall') {
     R(-40, 30, 80, 10); tri(-42, -10, 0, -32, 42, -10); R(-40, -10, 80, 6);
     for (const x of [-34, -18, -2, 14, 30]) R(x, -2, 6, 30);
+  } else if (kind === 'house') {      // stone ground floor, plastered upper floor, steep hipped roof
+    R(-34, 14, 68, 26); R(-30, -6, 60, 20);
+    g.beginPath(); g.moveTo(-44, -4); g.lineTo(-10, -40); g.lineTo(10, -40); g.lineTo(44, -4); g.closePath(); g.fill();
+    g.globalCompositeOperation = 'destination-out';
+    R(-22, 0, 12, 10); R(10, 0, 12, 10); R(-6, 22, 12, 18); R(-36, 9, 72, 2.5);
+    g.globalCompositeOperation = 'source-over';
   } else if (kind === 'kiosk') {
     R(-30, 30, 60, 10); R(-24, 4, 4, 26); R(20, 4, 4, 26); R(-2, 4, 4, 26);
     g.beginPath(); g.moveTo(-32, 6); g.quadraticCurveTo(0, -42, 32, 6); g.closePath(); g.fill(); R(-1.5, -34, 3, 12);
@@ -419,10 +426,22 @@ export class NamePlaque {
       return s;
     };
     g.textAlign = 'left'; g.textBaseline = 'alphabetic'; g.fillStyle = '#ffffff';
-    const name = this.names.main;
-    fit(name, 86, 700, 40); g.fillText(name, tx0, cy + 14);
-    const sub = this.names.others.join('  ·  ');
-    if (sub) { g.globalAlpha = 0.82; fit(sub, 36, 500, 20); g.fillText(sub, tx0, cy + 66); g.globalAlpha = 1; }
+    const name = this.names.main, sub = this.names.others.join('  ·  ');
+    // a long name (Kuća Radončića – Balića) goes on two lines rather than shrinking out of reach
+    let size = fit(name, 86, 700, 40), lines = [name];
+    if (size < 64) {
+      const cut = name.includes(' – ') ? name.indexOf(' – ') + 2 : name.lastIndexOf(' ', Math.ceil(name.length / 2) + 4);
+      if (cut > 0) lines = [name.slice(0, cut).trim(), name.slice(cut).trim()];
+    }
+    if (lines.length === 1) {
+      g.fillText(name, tx0, cy + 14);
+      if (sub) { g.globalAlpha = 0.82; fit(sub, 36, 500, 20); g.fillText(sub, tx0, cy + 66); g.globalAlpha = 1; }
+    } else {
+      size = Math.min(...lines.map(l => fit(l, 66, 700, 34)));
+      g.font = `700 ${size}px ${SANS}`;
+      g.fillText(lines[0], tx0, cy - 12); g.fillText(lines[1], tx0, cy - 12 + size * 0.98);
+      if (sub) { g.globalAlpha = 0.82; fit(sub, 30, 500, 18); g.fillText(sub, tx0, cy - 12 + size * 0.98 + 40); g.globalAlpha = 1; }
+    }
     g.textBaseline = 'alphabetic';
     this.tex.needsUpdate = true;
   }
