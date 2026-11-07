@@ -15,13 +15,13 @@ import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 import { HandEngine, HandSet, drawHandCutouts, drawPinchCursors } from './hands.js';
 import { GroundFx, NamePlaque, RISE } from './rise.js';
 
-const VERSION = '0.17 · 7 Nov 2026';
+const VERSION = '0.18 · 7 Nov 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
 
 // timings (seconds)
-const GROW = 2.5, SHRINK = 1.1, DWELL = 1.4, COOLDOWN = 2.0, FLIP_WINDOW = 2.5;
+const GROW = 2.5, SHRINK = 1.1, DWELL = 2.0, COOLDOWN = 2.0, FLIP_WINDOW = 2.5;
 const OPP = [5, 3, 4, 1, 2, 0];          // opposite face (top front right back left bottom)
 
 // ---------------- settings (per-viewer convenience only) ----------------
@@ -130,7 +130,6 @@ const city$ = {
   byaw: 0, byawFrom: 0, byawTo: 0, byt0: 0,
 };
 const now = () => performance.now() / 1000;
-const aim = { id: null, hid: -1, t0: 0, blocked: null };   // a hand's pointer held on a dot (handsAim)
 
 // ---------------- start ----------------
 $('#go').addEventListener('click', start);
@@ -937,10 +936,11 @@ function updatePins(tNow) {
     city$.lastXY = xy; city$.lastT = tNow;
   }
   const inside = bestD < ringR;
-  // with hand tracking on, holding still doesn't choose: the phone is held still on purpose while the other hand
-  // works the map, and the hand chooses by a quick pinch instead (the ring still names what's in the middle)
-  const handBusy = (settings.hands && (hands.state === 'ready' || hands.state === 'loading')) || tNow - handsSeenAt < 1.2;
-  const canHold = settings.hold && !handBusy && !touch.pts.size && best.model && inside && steady && best.id !== city$.blocked && tNow - city$.townSince > COOLDOWN;
+  // v0.18 (the user's choice): a building opens only by holding the circle in the middle on its dot for 2 s; the
+  // fingers (in the air or on the screen) only move and zoom the map. While the map is being moved or zoomed, and
+  // for a moment after, the hold doesn't count (the dot also has to stay steady on the screen).
+  const mapBusy = grip.n > 0 || touch.pts.size > 0 || tNow - grip.endAt < 0.8 || !!mapView.anim;
+  const canHold = settings.hold && !mapBusy && best.model && inside && steady && best.id !== city$.blocked && tNow - city$.townSince > COOLDOWN;
   if (!canHold) city$.dwellStart = tNow;
   city$.dwellP = canHold ? clamp((tNow - city$.dwellStart) / DWELL, 0, 1) : 0;
   setRing(best, city$.dwellP);
@@ -949,7 +949,7 @@ function updatePins(tNow) {
 let ringState = '';
 function setRing(L, p) {
   const ring = $('#ring');
-  const show = active && city$.mode === 'town' && !aim.id;      // a hand pointing at a dot shows its own name there
+  const show = active && city$.mode === 'town';
   ring.hidden = !show;
   if (!show) return;
   ring.classList.toggle('on', !!L);
@@ -1558,40 +1558,6 @@ const grip = { key: '', n: 0, hid: -1, cx0: 0, cz0: 0, g: [], z0: 1, d0: 0, t0: 
 // picture, lets go (the map stays as it is); pinch again for the next move. Two hands that both pinch stretch
 // the map between them.
 const AIR_LOCK = 1.1, AIR_DEAD = 0.08, AIR_GAIN = 1.25;
-// Opening a building with the hand (v0.17, the user's wish: "holding the pointer which shows on the map"): the
-// pointer between thumb and index of an open hand is aimed at a dot; it snaps to the dot, the name shows, and a
-// ring around the dot fills while the pointer stays on it. Full ring (1 s) = the building opens. Pinching is only
-// for moving and zooming the map. Right after letting go of the map, or after coming back from a building, the
-// pointer has to leave that dot first.
-const AIM_R = 34, AIM_KEEP = 52, AIM_HOLD = 1.0;
-function handsAim(list, tn) {
-  for (const h of list) h.aim = null;
-  if (city$.mode !== 'town') { if (city$.sel) aim.blocked = city$.sel.id; aim.id = null; return; }
-  const ok = !!active && !!townRoot && !touch.n && !grip.n && tn - grip.endAt > 0.6 && tn - city$.townSince > 0.8;
-  const free = ok ? list.filter(h => !h.holder && h.p && !h.pinch && (h.openN || 0) >= 2 && tn - h.seen < 0.25) : [];
-  const near = (h, id, r) => { const q = pinXY.get(id), el = pinEls.get(id); return q && el && !el.hidden && Math.hypot(q[0] - h.p[0], q[1] - h.p[1]) < r; };
-  // the building just opened or left: aiming at it again only after the pointer has been away from it (any hand
-  // in sight counts, also while aiming is paused; while its dot isn't shown yet it stays blocked)
-  if (aim.blocked) {
-    const q = pinXY.get(aim.blocked), el = pinEls.get(aim.blocked);
-    const hs = list.filter(h => !h.holder && h.p && tn - h.seen < 0.25);
-    if (q && el && !el.hidden && !hs.some(h => Math.hypot(q[0] - h.p[0], q[1] - h.p[1]) < AIM_KEEP)) aim.blocked = null;
-  }
-  let h = aim.id ? free.find(x => x.id === aim.hid && near(x, aim.id, AIM_KEEP)) : null;
-  let L = h ? byId(aim.id) : null;
-  if (!L) {
-    aim.id = null;
-    for (const x of free) {
-      const n = nearestPin(x.p[0], x.p[1], AIM_R);
-      if (n && n.id !== aim.blocked) { h = x; L = n; break; }
-    }
-    if (!L) return;
-    aim.id = L.id; aim.hid = h.id; aim.t0 = tn;
-  }
-  const q = pinXY.get(L.id), k = L.model ? (tn - aim.t0) / AIM_HOLD : 0;
-  h.aim = { x: q[0], y: q[1], k: Math.min(1, k), name: nameOf(L), model: !!L.model };
-  if (k >= 1) { aim.blocked = L.id; aim.id = null; h.aim = null; select(L.id); }
-}
 function handsToMap(list, tn) {
   const can = city$.mode === 'town' && active && townRoot && !touch.n;
   const free = can ? list.filter(h => !h.holder && h.p) : [];
@@ -1736,7 +1702,6 @@ function updateHands(tn) {
   markHolders(list, tn);
   if (list.some(h => !h.holder)) handsSeenAt = tn;
   handsToMap(list, tn);
-  handsAim(list, tn);
   return list;
 }
 // over the rendered town: the real hand (cut out of the camera picture) and the pinch cursors
@@ -1978,7 +1943,7 @@ window.__city = {
   get hands() { return { state: hands.state, delegate: hands.delegate, ms: hands.ms, rate: hands.rate, list: handSet.hands }; },
   get fov() { return { value: fovS.value, source: fovS.source, pending: fovS.pending }; }, get touchGrab() { return touch.n ? touch.g.map(g => g.slice()) : null; },
   cubeOnScreen() { return cubeOnScreen(now()); }, get cubeHeld() { return cubeHeld(now()); },
-  get hintKey() { return handHintKey(now()); }, get aim() { return { id: aim.id, blocked: aim.blocked, k: aim.id ? Math.min(1, (now() - aim.t0) / AIM_HOLD) : 0 }; },
+  get hintKey() { return handHintKey(now()); }, 
   injectHands(r) { handInject = r ? Object.assign({}, r, { id: 'inj' + (++injectN) }) : null; },
   // showcase video (tools/film): run without a camera. Each frame gets a picture (any canvas) and, when the
   // cube is in view, its pose (R row-major 3x3, t in mm, OpenCV camera axes); the rest is the normal app.

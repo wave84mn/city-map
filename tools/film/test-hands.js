@@ -1,6 +1,6 @@
 // Test for the hand gestures, run inside the film harness (no camera, no hand model: hand readings are made up here
 // and handed to the app with __city.injectHands). Usage:
-//   FILMSEG=tools/film/test-hands.js SHOTS="drag:50,zoom:59,two:70,aim:20" node tools/film/film.cjs OUT
+//   FILMSEG=tools/film/test-hands.js SHOTS="drag:50,zoom:59,two:70,whole:5" node tools/film/film.cjs OUT
 //   (or without SHOTS to film every frame); the checks are printed by the page (console) and kept in window.__handTest.
 (() => {
   const R = window.__handTest = { log: [], ok: true };
@@ -132,66 +132,27 @@
         }
         return { pose: true };
       } },
-    // v0.17: an open hand's pointer held on a gold dot opens its building (a ring fills for 1 s); pinching is only
-    // for the map. The pointer passing over dots doesn't open them, a pinch on a dot doesn't, a white dot only shows
-    // its name, and after coming back the same dot needs the pointer to leave it first.
-    { name: 'aim', dur: 1.9, enter() {
+    // v0.18 (the user's choice): buildings open only by holding the circle in the middle on a dot; the fingers only
+    // move and zoom the map. An open hand held still over a gold dot for 2.5 s opens nothing.
+    { name: 'pointer', dur: 2.8, enter() {
         const pins = window.__city.pins().filter(p => !p.hidden).map(p => { const m = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/.exec(p.tf); return { id: p.id, x: +m[1], y: +m[2], model: !!window.__city.landmarks.find(l => l.id === p.id).model }; })
           .filter(p => p.y > 150 && p.y < H() - 200);
-        // dots that stand apart from the others (in the dense centre two dots can sit on top of each other at the whole-map zoom)
         const room = p => Math.min(...window.__city.pins().filter(q => !q.hidden && q.id !== p.id).map(q => { const m = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/.exec(q.tf); return Math.hypot(+m[1] - p.x, +m[2] - p.y); }));
-        const byRoom = pins.map(p => Object.assign(p, { room: room(p) })).sort((u, v) => v.room - u.room);
-        R.gold = byRoom.filter(p => p.model); R.white = byRoom.filter(p => !p.model);
-        R.pk = R.gold[0];
-        console.warn('[handtest] dots: ' + byRoom.map(p => `${p.id} ${p.room.toFixed(0)}px`).join(', '));
+        R.gold = pins.map(p => Object.assign(p, { room: room(p) })).sort((u, v) => v.room - u.room).filter(p => p.model);
       }, update(lt) {
-        const P = R.pk;
-        if (!P) { if (!R.pk0) { R.pk0 = true; check(false, 'a gold dot is visible to point at'); } return { pose: true }; }
-        // the pointer (thumb-index midpoint) a little off the dot: it snaps to it
-        inject([hand(P.x + 6, P.y + 4, 110, 0)]);
-        if (lt > 0.5 && lt < 0.55 && !R.a1) {
-          R.a1 = true; const a = window.__city.aim, c = window.__city.city$;
-          check(a.id === P.id && a.k > 0.2 && a.k < 0.8 && c.mode === 'town', `holding the pointer on ${P.id}: the ring is filling (${a.id}, ${a.k.toFixed(2)})`);
-          const hh = window.__city.hands.list.find(x => x.aim);
-          check(!!hh && hh.aim.name.length > 0, `the name shows by the dot (${hh && hh.aim.name})`);
-        }
-        if (lt > 1.8 && !R.a2) {
-          R.a2 = true; const c = window.__city.city$;
-          check(c.sel && c.sel.id === P.id && c.mode !== 'town', `holding the pointer on ${P.id} opens it (mode ${c.mode})`);
-          check(Math.abs(window.__city.mapView.z - 1) < 0.01 && window.__city.grip.n === 0, 'pointing does not grab or zoom the map');
-        }
-        return { pose: true };
-      } },
-    // back to the town with the hand still on that dot: it must not open again until the pointer has left it
-    { name: 'stay', dur: 3.4, enter() { window.__city.goBack(); }, update(lt) {
-        const P = R.pk; if (!P) return { pose: true };
-        inject([hand(P.x + 6, P.y + 4, 110, 0)]);
-        if (lt > 3.3 && !R.st) { R.st = true; const c = window.__city.city$; check(c.mode === 'town' && !c.sel, `after coming back the pointer still on ${P.id} does not reopen it (mode ${c.mode})`); }
-        return { pose: true };
-      } },
-    // a pointer sweeping across the town (over dots) opens nothing
-    { name: 'pass', dur: 1.8, update(lt) {
-        const y = R.pk ? R.pk.y : H() * 0.5, x = W() * (0.1 + 0.8 * h.smooth(lt / 1.6));
-        inject(lt < 1.65 ? [hand(x, y, 110, 0)] : []);
-        if (lt > 1.7 && !R.ps) { R.ps = true; check(window.__city.city$.mode === 'town', 'a pointer passing over the dots opens nothing'); }
+        const P = R.gold && R.gold[0];
+        if (!P) { if (!R.pt0) { R.pt0 = true; check(false, 'a gold dot is visible'); } return { pose: true }; }
+        inject(lt < 2.6 ? [hand(P.x + 4, P.y + 3, 110, 0)] : []);
+        if (lt > 2.7 && !R.pt) { R.pt = true; check(window.__city.city$.mode === 'town', `an open hand held on ${P.id} opens nothing (fingers only move and zoom)`); }
         return { pose: true };
       } },
     // a pinch on a gold dot grabs the map instead of opening the building
     { name: 'pinchdot', dur: 1.9, update(lt) {
-        const P = R.gold && R.gold[1]; if (!P) return { pose: true };
+        const P = R.gold && R.gold[0]; if (!P) return { pose: true };
         const k = lt < 0.3 ? 0 : 1;
         inject(lt < 1.5 ? [hand(P.x, P.y, 110, k)] : []);
         if (lt > 0.8 && lt < 0.85 && !R.pd1) { R.pd1 = true; check(window.__city.grip.n === 1, 'a pinch on a dot takes hold of the map'); }
         if (lt > 1.8 && !R.pd2) { R.pd2 = true; check(window.__city.city$.mode === 'town', 'a pinch on a dot does not open the building'); }
-        return { pose: true };
-      } },
-    // a white dot (no model): the name shows, nothing opens
-    { name: 'white', dur: 1.8, update(lt) {
-        const P = R.white && R.white[0];
-        if (!P) { inject([]); return { pose: true }; }
-        inject(lt < 1.6 ? [hand(P.x + 6, P.y + 4, 110, 0)] : []);
-        if (lt > 0.6 && lt < 0.65 && !R.w1) { R.w1 = true; const hh = window.__city.hands.list.find(x => x.aim); check(!!hh && hh.aim.model === false, `pointing at ${P.id} (no model) shows its name (${hh && hh.aim.name})`); }
-        if (lt > 1.7 && !R.w2) { R.w2 = true; check(window.__city.city$.mode === 'town', `pointing at ${P.id} (no model) opens nothing`); }
         return { pose: true };
       } },
     // pinch at A, then spread thumb and index (gap 0 -> 5.2 cm): zoom about 2.2x around the fingers
