@@ -159,7 +159,29 @@ function scratch(w, h) {
   return scr;
 }
 
-// the pinch cursor: thumb and index tips joined by a line; a filled dot while the map is held
+// the pointer: thumb and index tips joined by a line, a ring between them; a filled dot while the map is held.
+// Aimed at a dot (h.aim, v0.17): it snaps to the dot with a line, the name shows above it, and a ring around the
+// dot fills while the pointer is held there.
+const SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+function drawAim(ctx, h, accent) {
+  const { x, y, k, name, model } = h.aim;
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(h.p[0], h.p[1]); ctx.lineTo(x, y); ctx.stroke();
+  ctx.beginPath(); ctx.arc(x, y, 20, 0, Math.PI * 2);
+  ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,255,255,0.95)'; ctx.stroke();
+  if (model && k > 0) {
+    ctx.beginPath(); ctx.arc(x, y, 20, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k);
+    ctx.lineWidth = 6; ctx.strokeStyle = accent; ctx.stroke();
+  }
+  // the name on a small dark label above the dot
+  ctx.font = `600 13px ${SANS}`;
+  const w = ctx.measureText(name).width + 18, lx = x - w / 2, ly = y - 52;
+  ctx.fillStyle = 'rgba(12,18,30,0.78)';
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(lx, ly, w, 24, 12); else ctx.rect(lx, ly, w, 24);
+  ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(name, x, ly + 12.5);
+}
 export function drawPinchCursors(ctx, hands, dpr, accent, pairLine) {
   ctx.save();
   ctx.scale(dpr, dpr);
@@ -174,13 +196,12 @@ export function drawPinchCursors(ctx, hands, dpr, accent, pairLine) {
       for (const p of [a, b]) { ctx.beginPath(); ctx.arc(p[0], p[1], 4.5, 0, Math.PI * 2); ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.fill(); }
       ctx.beginPath(); ctx.arc(h.p[0], h.p[1], 13 - 4 * close, 0, Math.PI * 2);
       ctx.strokeStyle = `rgba(255,255,255,${0.55 + 0.4 * close})`; ctx.lineWidth = 2; ctx.stroke();
+      ctx.beginPath(); ctx.arc(h.p[0], h.p[1], 3, 0, Math.PI * 2); ctx.fillStyle = h.aim ? accent : 'rgba(255,255,255,0.95)'; ctx.fill();
+      if (h.aim) drawAim(ctx, h, accent);
     } else {
       ctx.beginPath(); ctx.arc(h.p[0], h.p[1], 17, 0, Math.PI * 2); ctx.fillStyle = 'rgba(47,123,255,0.22)'; ctx.fill();
       ctx.beginPath(); ctx.arc(h.p[0], h.p[1], 9, 0, Math.PI * 2); ctx.fillStyle = accent; ctx.fill();
-      ctx.lineWidth = 2.5; ctx.strokeStyle = '#fff'; ctx.stroke();      if (h.pickProgress > 0) {        // opening the building under the pinch: a ring fills
-        ctx.beginPath(); ctx.arc(h.p[0], h.p[1], 21, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, h.pickProgress));
-        ctx.lineWidth = 4; ctx.strokeStyle = '#fff'; ctx.stroke();
-      }
+      ctx.lineWidth = 2.5; ctx.strokeStyle = '#fff'; ctx.stroke();
     }
   }
   if (pairLine) {

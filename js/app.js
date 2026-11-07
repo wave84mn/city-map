@@ -15,7 +15,7 @@ import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 import { HandEngine, HandSet, drawHandCutouts, drawPinchCursors } from './hands.js';
 import { GroundFx, NamePlaque, RISE } from './rise.js';
 
-const VERSION = '0.16 · 7 Nov 2026';
+const VERSION = '0.17 · 7 Nov 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
@@ -130,6 +130,7 @@ const city$ = {
   byaw: 0, byawFrom: 0, byawTo: 0, byt0: 0,
 };
 const now = () => performance.now() / 1000;
+const aim = { id: null, hid: -1, t0: 0, blocked: null };   // a hand's pointer held on a dot (handsAim)
 
 // ---------------- start ----------------
 $('#go').addEventListener('click', start);
@@ -948,7 +949,7 @@ function updatePins(tNow) {
 let ringState = '';
 function setRing(L, p) {
   const ring = $('#ring');
-  const show = active && city$.mode === 'town';
+  const show = active && city$.mode === 'town' && !aim.id;      // a hand pointing at a dot shows its own name there
   ring.hidden = !show;
   if (!show) return;
   ring.classList.toggle('on', !!L);
@@ -1550,13 +1551,47 @@ function handHintKey(tn) {
   return 'handNone';
 }
 
-const grip = { key: '', n: 0, hid: -1, pick: null, cx0: 0, cz0: 0, g: [], z0: 1, d0: 0, t0: 0, start: [], moved: 0, zoomed: 0, gap0: 0.025, gs: 0.025, gapSeen: -1, still: null, endAt: -10 };
+const grip = { key: '', n: 0, hid: -1, cx0: 0, cz0: 0, g: [], z0: 1, d0: 0, t0: 0, start: [], moved: 0, zoomed: 0, gap0: 0.025, gs: 0.025, gapSeen: -1, still: null, endAt: -10 };
 // One hand (v0.12, from the user's 7 Nov video: he spread thumb and index to zoom, like on the screen):
 // pinch thumb and index to take hold of the map; while held, the map point between the fingers follows the hand
 // and spreading / closing the fingers zooms in / out. Holding still for a second, or taking the hand out of the
 // picture, lets go (the map stays as it is); pinch again for the next move. Two hands that both pinch stretch
 // the map between them.
-const AIR_LOCK = 1.1, AIR_DEAD = 0.08, AIR_GAIN = 1.25, PICK_TAP = 0.5, PICK_HOLD = 0.6;
+const AIR_LOCK = 1.1, AIR_DEAD = 0.08, AIR_GAIN = 1.25;
+// Opening a building with the hand (v0.17, the user's wish: "holding the pointer which shows on the map"): the
+// pointer between thumb and index of an open hand is aimed at a dot; it snaps to the dot, the name shows, and a
+// ring around the dot fills while the pointer stays on it. Full ring (1 s) = the building opens. Pinching is only
+// for moving and zooming the map. Right after letting go of the map, or after coming back from a building, the
+// pointer has to leave that dot first.
+const AIM_R = 34, AIM_KEEP = 52, AIM_HOLD = 1.0;
+function handsAim(list, tn) {
+  for (const h of list) h.aim = null;
+  if (city$.mode !== 'town') { if (city$.sel) aim.blocked = city$.sel.id; aim.id = null; return; }
+  const ok = !!active && !!townRoot && !touch.n && !grip.n && tn - grip.endAt > 0.6 && tn - city$.townSince > 0.8;
+  const free = ok ? list.filter(h => !h.holder && h.p && !h.pinch && (h.openN || 0) >= 2 && tn - h.seen < 0.25) : [];
+  const near = (h, id, r) => { const q = pinXY.get(id), el = pinEls.get(id); return q && el && !el.hidden && Math.hypot(q[0] - h.p[0], q[1] - h.p[1]) < r; };
+  // the building just opened or left: aiming at it again only after the pointer has been away from it (any hand
+  // in sight counts, also while aiming is paused; while its dot isn't shown yet it stays blocked)
+  if (aim.blocked) {
+    const q = pinXY.get(aim.blocked), el = pinEls.get(aim.blocked);
+    const hs = list.filter(h => !h.holder && h.p && tn - h.seen < 0.25);
+    if (q && el && !el.hidden && !hs.some(h => Math.hypot(q[0] - h.p[0], q[1] - h.p[1]) < AIM_KEEP)) aim.blocked = null;
+  }
+  let h = aim.id ? free.find(x => x.id === aim.hid && near(x, aim.id, AIM_KEEP)) : null;
+  let L = h ? byId(aim.id) : null;
+  if (!L) {
+    aim.id = null;
+    for (const x of free) {
+      const n = nearestPin(x.p[0], x.p[1], AIM_R);
+      if (n && n.id !== aim.blocked) { h = x; L = n; break; }
+    }
+    if (!L) return;
+    aim.id = L.id; aim.hid = h.id; aim.t0 = tn;
+  }
+  const q = pinXY.get(L.id), k = L.model ? (tn - aim.t0) / AIM_HOLD : 0;
+  h.aim = { x: q[0], y: q[1], k: Math.min(1, k), name: nameOf(L), model: !!L.model };
+  if (k >= 1) { aim.blocked = L.id; aim.id = null; h.aim = null; select(L.id); }
+}
 function handsToMap(list, tn) {
   const can = city$.mode === 'town' && active && townRoot && !touch.n;
   const free = can ? list.filter(h => !h.holder && h.p) : [];
@@ -1577,9 +1612,6 @@ function handsToMap(list, tn) {
       grip.gap0 = Math.max(0.025, hands[0].gap || 0.025); grip.gs = grip.gap0; grip.gapSeen = hands[0].seen;
       grip.still = { t: tn, p: hands[0].p.slice(), gap: grip.gap0 };
       grip.cx0 = mapView.cx; grip.cz0 = mapView.cz;
-      // a pinch on a dot picks that building (v0.13: the user pinched dots to open them)
-      const pin = hands.length === 1 ? nearestPin(hands[0].p[0], hands[0].p[1], 36) : null;
-      grip.pick = pin ? pin.id : null;
       grip.d0 = grip.n === 2 ? Math.hypot(grip.g[0][0] - grip.g[1][0], grip.g[0][1] - grip.g[1][1]) : 0;
       mapView.anim = null;
     } else if (key) grip.key = '';
@@ -1588,21 +1620,6 @@ function handsToMap(list, tn) {
   const zBefore = mapView.z;
   if (grip.n === 1) {
     const h = free.find(x => x.id === grip.hid);
-    h.pickProgress = 0;
-    if (grip.pick) {
-      // A pinch on a dot opens its building: a quick pinch (let go within half a second) or a pinch held still for
-      // 0.6 s (a ring fills around the fingers). Moving the hand first turns it into a normal move / zoom.
-      const moved = Math.hypot(h.p[0] - grip.start[0][0], h.p[1] - grip.start[0][1]), held = tn - grip.t0;
-      if (moved > 24) grip.pick = null;
-      else if ((!h.pinch && held < PICK_TAP) || (h.pinch && held >= PICK_HOLD)) {
-        const id = grip.pick;
-        mapView.z = grip.z0; mapView.cx = grip.cx0; mapView.cz = grip.cz0;     // undo what letting go zoomed
-        grip.key = 'done'; grip.n = 0; grip.endAt = tn; grip.pick = null;
-        select(id);
-        return;
-      } else if (!h.pinch) grip.pick = null;
-      else { h.pickProgress = held / PICK_HOLD; return; }           // the map keeps still while a dot is being picked
-    }
     if (h.seen !== grip.gapSeen) { grip.gapSeen = h.seen; grip.gs += 0.5 * ((h.gap || grip.gs) - grip.gs); }   // smoothed finger gap
     grip.moved = Math.max(grip.moved, Math.hypot(h.p[0] - grip.start[0][0], h.p[1] - grip.start[0][1]));
     // fingers apart: zoom in; closing them again zooms back out, but never below the zoom at the pinch (the
@@ -1719,6 +1736,7 @@ function updateHands(tn) {
   markHolders(list, tn);
   if (list.some(h => !h.holder)) handsSeenAt = tn;
   handsToMap(list, tn);
+  handsAim(list, tn);
   return list;
 }
 // over the rendered town: the real hand (cut out of the camera picture) and the pinch cursors
@@ -1960,7 +1978,7 @@ window.__city = {
   get hands() { return { state: hands.state, delegate: hands.delegate, ms: hands.ms, rate: hands.rate, list: handSet.hands }; },
   get fov() { return { value: fovS.value, source: fovS.source, pending: fovS.pending }; }, get touchGrab() { return touch.n ? touch.g.map(g => g.slice()) : null; },
   cubeOnScreen() { return cubeOnScreen(now()); }, get cubeHeld() { return cubeHeld(now()); },
-  get hintKey() { return handHintKey(now()); }, get pick() { return grip.pick; },
+  get hintKey() { return handHintKey(now()); }, get aim() { return { id: aim.id, blocked: aim.blocked, k: aim.id ? Math.min(1, (now() - aim.t0) / AIM_HOLD) : 0 }; },
   injectHands(r) { handInject = r ? Object.assign({}, r, { id: 'inj' + (++injectN) }) : null; },
   // showcase video (tools/film): run without a camera. Each frame gets a picture (any canvas) and, when the
   // cube is in view, its pose (R row-major 3x3, t in mm, OpenCV camera axes); the rest is the normal app.
