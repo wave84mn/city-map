@@ -13,7 +13,7 @@ import { estimateFov, median } from './cv/calib.js';
 import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 import { HandEngine, HandSet, drawHandCutouts, drawPinchCursors } from './hands.js';
 
-const VERSION = '0.12 · 7 Nov 2026';
+const VERSION = '0.13 · 7 Nov 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
@@ -1518,13 +1518,13 @@ function handHintKey(tn) {
   return 'handNone';
 }
 
-const grip = { key: '', n: 0, hid: -1, g: [], z0: 1, d0: 0, t0: 0, start: [], moved: 0, zoomed: 0, gap0: 0.025, gs: 0.025, gapSeen: -1, still: null, endAt: -10 };
+const grip = { key: '', n: 0, hid: -1, pick: null, cx0: 0, cz0: 0, g: [], z0: 1, d0: 0, t0: 0, start: [], moved: 0, zoomed: 0, gap0: 0.025, gs: 0.025, gapSeen: -1, still: null, endAt: -10 };
 // One hand (v0.12, from the user's 7 Nov video: he spread thumb and index to zoom, like on the screen):
 // pinch thumb and index to take hold of the map; while held, the map point between the fingers follows the hand
 // and spreading / closing the fingers zooms in / out. Holding still for a second, or taking the hand out of the
 // picture, lets go (the map stays as it is); pinch again for the next move. Two hands that both pinch stretch
 // the map between them.
-const AIR_LOCK = 1.1, AIR_DEAD = 0.08, AIR_GAIN = 1.25;
+const AIR_LOCK = 1.1, AIR_DEAD = 0.08, AIR_GAIN = 1.25, PICK_TAP = 0.5, PICK_HOLD = 0.6;
 function handsToMap(list, tn) {
   const can = city$.mode === 'town' && active && townRoot && !touch.n;
   const free = can ? list.filter(h => !h.holder && h.p) : [];
@@ -1544,6 +1544,10 @@ function handsToMap(list, tn) {
       grip.z0 = mapView.z; grip.start = hands.map(h => h.p.slice());
       grip.gap0 = Math.max(0.025, hands[0].gap || 0.025); grip.gs = grip.gap0; grip.gapSeen = hands[0].seen;
       grip.still = { t: tn, p: hands[0].p.slice(), gap: grip.gap0 };
+      grip.cx0 = mapView.cx; grip.cz0 = mapView.cz;
+      // a pinch on a dot picks that building (v0.13: the user pinched dots to open them)
+      const pin = hands.length === 1 ? nearestPin(hands[0].p[0], hands[0].p[1], 36) : null;
+      grip.pick = pin ? pin.id : null;
       grip.d0 = grip.n === 2 ? Math.hypot(grip.g[0][0] - grip.g[1][0], grip.g[0][1] - grip.g[1][1]) : 0;
       mapView.anim = null;
     } else if (key) grip.key = '';
@@ -1552,10 +1556,26 @@ function handsToMap(list, tn) {
   const zBefore = mapView.z;
   if (grip.n === 1) {
     const h = free.find(x => x.id === grip.hid);
+    h.pickProgress = 0;
+    if (grip.pick) {
+      // A pinch on a dot opens its building: a quick pinch (let go within half a second) or a pinch held still for
+      // 0.6 s (a ring fills around the fingers). Moving the hand first turns it into a normal move / zoom.
+      const moved = Math.hypot(h.p[0] - grip.start[0][0], h.p[1] - grip.start[0][1]), held = tn - grip.t0;
+      if (moved > 24) grip.pick = null;
+      else if ((!h.pinch && held < PICK_TAP) || (h.pinch && held >= PICK_HOLD)) {
+        const id = grip.pick;
+        mapView.z = grip.z0; mapView.cx = grip.cx0; mapView.cz = grip.cz0;     // undo what letting go zoomed
+        grip.key = 'done'; grip.n = 0; grip.endAt = tn; grip.pick = null;
+        select(id);
+        return;
+      } else if (!h.pinch) grip.pick = null;
+      else { h.pickProgress = held / PICK_HOLD; return; }           // the map keeps still while a dot is being picked
+    }
     if (h.seen !== grip.gapSeen) { grip.gapSeen = h.seen; grip.gs += 0.5 * ((h.gap || grip.gs) - grip.gs); }   // smoothed finger gap
     grip.moved = Math.max(grip.moved, Math.hypot(h.p[0] - grip.start[0][0], h.p[1] - grip.start[0][1]));
-    // fingers apart: zoom in, together: zoom out (a small dead zone keeps a plain move from zooming)
-    const r = Math.log(grip.gs / grip.gap0);
+    // fingers apart: zoom in; closing them again zooms back out, but never below the zoom at the pinch (the
+    // fingers keep closing for a moment after the pinch is seen, and that must not zoom out). Small dead zone.
+    const r = Math.max(0, Math.log(grip.gs / grip.gap0));
     mapView.z = clamp(grip.z0 * Math.exp(Math.sign(r) * Math.max(0, Math.abs(r) - AIR_DEAD) * AIR_GAIN), 1, ZMAX);
     for (let it = 0; it < 2; it++) {           // twice: the ground plane's height depends on the zoom
       const P = planeHit(h.p);
@@ -1896,7 +1916,7 @@ window.__city = {
   get hands() { return { state: hands.state, delegate: hands.delegate, ms: hands.ms, rate: hands.rate, list: handSet.hands }; },
   get fov() { return { value: fovS.value, source: fovS.source, pending: fovS.pending }; }, get touchGrab() { return touch.n ? touch.g.map(g => g.slice()) : null; },
   cubeOnScreen() { return cubeOnScreen(now()); }, get cubeHeld() { return cubeHeld(now()); },
-  get hintKey() { return handHintKey(now()); },
+  get hintKey() { return handHintKey(now()); }, get pick() { return grip.pick; },
   injectHands(r) { handInject = r ? Object.assign({}, r, { id: 'inj' + (++injectN) }) : null; },
   // showcase video (tools/film): run without a camera. Each frame gets a picture (any canvas) and, when the
   // cube is in view, its pose (R row-major 3x3, t in mm, OpenCV camera axes); the rest is the normal app.

@@ -177,7 +177,10 @@ export function drawPinchCursors(ctx, hands, dpr, accent, pairLine) {
     } else {
       ctx.beginPath(); ctx.arc(h.p[0], h.p[1], 17, 0, Math.PI * 2); ctx.fillStyle = 'rgba(47,123,255,0.22)'; ctx.fill();
       ctx.beginPath(); ctx.arc(h.p[0], h.p[1], 9, 0, Math.PI * 2); ctx.fillStyle = accent; ctx.fill();
-      ctx.lineWidth = 2.5; ctx.strokeStyle = '#fff'; ctx.stroke();
+      ctx.lineWidth = 2.5; ctx.strokeStyle = '#fff'; ctx.stroke();      if (h.pickProgress > 0) {        // opening the building under the pinch: a ring fills
+        ctx.beginPath(); ctx.arc(h.p[0], h.p[1], 21, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, h.pickProgress));
+        ctx.lineWidth = 4; ctx.strokeStyle = '#fff'; ctx.stroke();
+      }
     }
   }
   if (pairLine) {

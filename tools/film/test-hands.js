@@ -28,6 +28,13 @@
   const lerp = (a, b, k) => a + (b - a) * k;
   const W = () => innerWidth, H = () => innerHeight;
   let A, B, gA, C, D, gC, gD, tapPin, E, holdP;
+  const offDots = (x, y) => {
+    const pins = window.__city.pins().filter(p => !p.hidden).map(p => /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/.exec(p.tf)).filter(Boolean).map(m => [+m[1], +m[2]]);
+    for (const d of [0, 20, -20, 40, -40, 60, -60, 80, -80]) for (const [ox, oy] of [[d, 0], [0, d], [d, d], [d, -d]]) {
+      if (pins.every(q => Math.hypot(q[0] - x - ox, q[1] - y - oy) > 48)) return [x + ox, y + oy];
+    }
+    return [x, y];
+  };
 
   window.__filmSegments = (h) => [
     { name: 'setup', dur: 1.6, capture: false, enter() {
@@ -84,7 +91,8 @@
         if (!R.lapP) {
           const d = [cs.c[0] - cs.tc[0], cs.c[1] - cs.tc[1]];
           const low = cs.hull.reduce((m, p) => (p[0] * d[0] + p[1] * d[1] > m[0] * d[0] + m[1] * d[1] ? p : m), cs.hull[0]);
-          R.lapP = [cs.c[0] + 0.6 * (low[0] - cs.c[0]), cs.c[1] + 0.6 * (low[1] - cs.c[1]), cs.size];
+          const q = offDots(cs.c[0] + 0.6 * (low[0] - cs.c[0]), cs.c[1] + 0.6 * (low[1] - cs.c[1]));
+          R.lapP = [q[0], q[1], cs.size];
         }
         const k = lt < 0.35 ? 0 : 1;
         inject(lt < 1.2 ? [hand(R.lapP[0], R.lapP[1], 0.9 * R.lapP[2], k)] : []);
@@ -98,7 +106,7 @@
         return { pose: true };
       } },
     // a free hand above the town that turns up already closed: no grab until it opens its fingers and pinches
-    { name: 'closed', dur: 2.4, enter() { E = [W() * 0.5, H() * 0.36]; },
+    { name: 'closed', dur: 2.4, enter() { E = offDots(W() * 0.5, H() * 0.36); },
       update(lt) {
         const k = lt < 0.8 ? 1 : lt < 1.1 ? 0 : 1;
         inject(lt < 1.9 ? [hand(E[0], E[1], 130, k)] : []);
@@ -114,7 +122,7 @@
         if (!cs) return { pose: true };
         const d = [cs.c[0] - cs.tc[0], cs.c[1] - cs.tc[1]];
         const low = cs.hull.reduce((m, p) => (p[0] * d[0] + p[1] * d[1] > m[0] * d[0] + m[1] * d[1] ? p : m), cs.hull[0]);
-        if (!R.n0) R.n0 = [cs.c[0] + 0.6 * (low[0] - cs.c[0]), cs.c[1] + 0.6 * (low[1] - cs.c[1]), cs.size];
+        if (!R.n0) { const q = offDots(cs.c[0] + 0.6 * (low[0] - cs.c[0]), cs.c[1] + 0.6 * (low[1] - cs.c[1])); R.n0 = [q[0], q[1], cs.size]; }
         const k = lt < 0.3 ? 0 : 1;
         inject(lt < 1.2 ? [hand(R.n0[0], R.n0[1], 0.9 * R.n0[2], k)] : []);
         if (lt > 0.9 && !R.n1) {
@@ -124,8 +132,42 @@
         }
         return { pose: true };
       } },
+    // pinching a gold dot opens its building: a quick pinch, or a pinch held still (v0.13, from the user's 3rd video)
+    ...['tap', 'hold'].flatMap(kind => [
+      { name: 'pick' + kind, dur: 1.8, enter() {
+          const pins = window.__city.pins().filter(p => !p.hidden && window.__city.landmarks.find(l => l.id === p.id).model)
+            .map(p => { const m = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/.exec(p.tf); return { id: p.id, x: +m[1], y: +m[2] }; })
+            .filter(p => p.y > 150 && p.y < H() - 200);
+          R.pk = pins[kind === 'tap' ? 0 : pins.length - 1];
+        }, update(lt) {
+          const P = R.pk;
+          if (!P) { if (!R['pk0' + kind]) { R['pk0' + kind] = true; check(false, 'a gold dot is visible to pinch'); } return { pose: true }; }
+          const k = lt < 0.3 ? 0 : kind === 'tap' ? (lt < 0.55 ? 1 : 0) : 1;
+          inject(lt < 1.2 ? [hand(P.x, P.y, 110, k)] : []);
+          if (kind === 'hold' && lt > 0.55 && lt < 0.6 && !R.pkh) { R.pkh = true; check(window.__city.pick === P.id && window.__city.city$.mode === 'town', `holding a pinch on ${P.id} is picking it`); }
+          if (lt > 1.7 && !R['pk' + kind]) {
+            R['pk' + kind] = true;
+            const c = window.__city.city$;
+            check(c.sel && c.sel.id === P.id && c.mode !== 'town', `${kind === 'tap' ? 'a quick pinch' : 'a pinch held'} on ${P.id} opens it (mode ${c.mode})`);
+            check(Math.abs(window.__city.mapView.z - 1) < 0.01, 'opening by pinching does not zoom the map');
+          }
+          return { pose: true };
+        } },
+      { name: 'back' + kind, dur: 2.2, capture: false, enter() { window.__city.goBack(); }, update() { inject([]); return { pose: true }; } },
+    ]),
+    // a pinch that starts on a dot but drags away moves the map instead (no building opens)
+    { name: 'pickdrag', dur: 1.8, enter() {
+        const pins = window.__city.pins().filter(p => !p.hidden).map(p => { const m = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/.exec(p.tf); return { id: p.id, x: +m[1], y: +m[2] }; }).filter(p => p.y > 150 && p.y < H() - 200);
+        R.pd = pins[0];
+      }, update(lt) {
+        const P = R.pd; if (!P) return { pose: true };
+        const k = lt < 0.3 ? 0 : 1, m = h.smooth((lt - 0.35) / 0.4);
+        inject(lt < 1.3 ? [hand(P.x + 90 * m, P.y, 110, k)] : []);
+        if (lt > 1.7 && !R.pdd) { R.pdd = true; check(window.__city.city$.mode === 'town', 'a pinch that drags away from a dot does not open it'); }
+        return { pose: true };
+      } },
     // pinch at A, then spread thumb and index (gap 0 -> 5.2 cm): zoom about 2.2x around the fingers
-    { name: 'zoom', dur: 1.9, enter() { A = [W() * 0.45, H() * 0.5]; gA = null; },
+    { name: 'zoom', dur: 1.9, enter() { A = offDots(W() * 0.45, H() * 0.5); gA = null; },
       update(lt) {
         const k = lt < 0.1 ? 0 : lt < 0.45 ? h.smooth((lt - 0.1) / 0.2) : lerp(1, 0.35, h.smooth((lt - 0.45) / 1.2));
         inject([hand(A[0], A[1], 140, k)]);
@@ -155,7 +197,7 @@
         return { pose: true };
       } },
     // the hand holds still: after about a second it lets go and the zoom stays; closing the fingers then does nothing
-    { name: 'lock', dur: 2.2, update(lt) {
+    { name: 'lock', dur: 2.6, update(lt) {
         const k = lt < 1.5 ? 0.35 : 1;
         inject(lt < 1.9 ? [hand(B[0], B[1], 140, k)] : []);
         if (lt > 1.4 && !R.lock1) { R.lock1 = true; R.zLock = window.__city.mapView.z; check(window.__city.grip.n === 0, 'holding still lets go of the map'); check(Math.abs(R.zLock - R.zAfterZoom) / R.zAfterZoom < 0.02, `the zoom stays when letting go (${R.zLock.toFixed(2)})`); }
@@ -163,9 +205,9 @@
         return { pose: true };
       } },
     // drag far past the town's edge: the map gives a little, then springs back inside when let go
-    { name: 'edge', dur: 2.4, update(lt) {
+    { name: 'edge', dur: 2.4, enter() { const v = window.__city.mapView; v.cx = 0; v.cz = 0; }, update(lt) {
         const k = h.smooth((lt - 0.05) / 0.15), m = h.smooth((lt - 0.25) / 1.0);   // pinch, drag far, take the hand away
-        const p = [lerp(W() * 0.3, W() * 0.95, m), H() * 0.5];
+        const p = [lerp(W() * 0.05, W() * 0.95, m), H() * 0.5];
         inject(lt < 1.7 ? [hand(p[0], p[1], 150, k)] : []);
         const v = window.__city.mapView, lim = 138.1 * (1 - 1 / v.z);
         if (lt > 1.2 && lt < 1.3 && !R.edge1) { R.edge1 = true; R.over = Math.max(Math.abs(v.cx), Math.abs(v.cz)) - lim; check(R.over > 0.5, `past the edge the map gives a little (${R.over.toFixed(1)} mm)`); }
