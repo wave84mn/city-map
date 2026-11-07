@@ -68,10 +68,10 @@ def ring_box(m, x0, x1, z0, z1, y0, y1, out, col):
     box(m, x0 - out, x1 + out, y0, y1, z0 - out, z1 + out, col, top=True, bottom=True, ao=False)
 
 
-def lathe(m, cx, cz, prof, col, seg=48, flat=False, cap_top=False, cap_bot=False, ao=True):
+def lathe(m, cx, cz, prof, col, seg=48, flat=False, cap_top=False, cap_bot=False, ao=True, t0=0.0):
     """Surface of revolution through profile [(r, y), ...] bottom to top. flat: faceted (one normal per side)."""
     prof = np.asarray(prof, float)
-    th = np.linspace(0, 2 * np.pi, seg + 1)
+    th = np.linspace(t0, t0 + 2 * np.pi, seg + 1)
     if flat:
         for i in range(seg):
             for j in range(len(prof) - 1):
@@ -178,7 +178,7 @@ def window(m, face, u, y0, y1, w, wall, arch=False, mullion=False, frame=None, s
         m.add(Pm, [n] * len(Pm), GLASS, Fm)
 
 
-def arcade_wall(m, x0, x1, H, z_out, t, openings, col):
+def arcade_wall(m, x0, x1, H, z_out, t, openings, col, y0=0.0):
     """A wall in the plane z = z_out (outside face, facing +Z), thickness t, with round-headed openings
     [(cx, w, spring_y)] from the floor."""
     zi = z_out - t
@@ -189,7 +189,7 @@ def arcade_wall(m, x0, x1, H, z_out, t, openings, col):
     for k in range(0, len(edges), 2):           # piers
         a, b = edges[k], edges[k + 1]
         if b - a < 1e-6: continue
-        for y_a, y_b in ((0, 2.2), (2.2, H)):
+        for y_a, y_b in ((y0, y0 + 2.2), (y0 + 2.2, H)):
             m.quad((a, y_a, z_out), (b, y_a, z_out), (b, y_b, z_out), (a, y_b, z_out), col)
             m.quad((b, y_a, zi), (a, y_a, zi), (a, y_b, zi), (b, y_b, zi), SHADE_W)
     for cx, w, ys in xs:
@@ -204,11 +204,11 @@ def arcade_wall(m, x0, x1, H, z_out, t, openings, col):
             m.quad((bx, by, z_out), (ax, ay, z_out), (ax, ay, zi), (bx, by, zi), TRIM, nrm=(-mx, -my, 0), ao=False)
         for sx in (-1, 1):                         # jambs
             x = cx + sx * r
-            if sx < 0: m.quad((x, 0, zi), (x, 0, z_out), (x, ys, z_out), (x, ys, zi), TRIM, nrm=(1, 0, 0))
-            else: m.quad((x, 0, z_out), (x, 0, zi), (x, ys, zi), (x, ys, z_out), TRIM, nrm=(-1, 0, 0))
+            if sx < 0: m.quad((x, y0, zi), (x, y0, z_out), (x, ys, z_out), (x, ys, zi), TRIM, nrm=(1, 0, 0))
+            else: m.quad((x, y0, z_out), (x, y0, zi), (x, ys, zi), (x, ys, z_out), TRIM, nrm=(-1, 0, 0))
     # wall ends
-    m.quad((x0, 0, zi), (x0, 0, z_out), (x0, H, z_out), (x0, H, zi), col, nrm=(-1, 0, 0))
-    m.quad((x1, 0, z_out), (x1, 0, zi), (x1, H, zi), (x1, H, z_out), col, nrm=(1, 0, 0))
+    m.quad((x0, y0, zi), (x0, y0, z_out), (x0, H, z_out), (x0, H, zi), col, nrm=(-1, 0, 0))
+    m.quad((x1, y0, z_out), (x1, y0, zi), (x1, H, zi), (x1, H, z_out), col, nrm=(1, 0, 0))
 
 
 SHADE_W = (0.74, 0.735, 0.72)     # inside faces of the porch walls

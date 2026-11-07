@@ -15,7 +15,7 @@ import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 import { HandEngine, HandSet, drawHandCutouts, drawPinchCursors } from './hands.js';
 import { GroundFx, NamePlaque, RISE } from './rise.js';
 
-const VERSION = '0.15 · 7 Nov 2026';
+const VERSION = '0.16 · 7 Nov 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);

@@ -98,11 +98,14 @@ const { chromium } = require(process.env.PW || '/opt/node22/lib/node_modules/pla
     expect(/Gucia/.test(s3.status), 'Albanian status text');
   } else if (script === 'flip') {
     await page.evaluate(() => { window.__city.settings.hold = false; window.__city.select('opstina'); });
-    const done = await waitMode('building', 5); await page.waitForTimeout(400);
+    // the building rises for 2.5 s; in this slow test browser the video may already turn the cube over during the
+    // rise (which reverses it), so the check is that Opština was chosen and the flip then sends it back
+    let seen = '';
+    for (let i = 0; i < 40 && !['building', 'shrink'].includes(seen); i++) { const st = await state(); if (st.sel === 'opstina') seen = st.mode; await page.waitForTimeout(150); }
     const s = await log('building'); await shot('building');
-    expect(done && s.sel === 'opstina', 'Opština fills the cube');
+    expect(['grow', 'building', 'shrink'].includes(seen), `Opština comes out of the cube (${seen || s.mode})`);
     // the video turns the cube upside down at 7 s after the camera started
-    const back = await waitMode('shrink', 12);
+    const back = seen === 'shrink' || (await state()).mode === 'shrink' || await waitMode('shrink', 12);
     await log('flipped'); await page.waitForTimeout(350); await shot('flip_mid');
     const town = await waitMode('town', 4); await page.waitForTimeout(800);
     await log('town again'); await shot('town_again');
