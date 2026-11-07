@@ -49,7 +49,8 @@
         const d = [cs.c[0] - cs.tc[0], cs.c[1] - cs.tc[1]];
         const low = cs.hull.reduce((m, p) => (p[0] * d[0] + p[1] * d[1] > m[0] * d[0] + m[1] * d[1] ? p : m), cs.hull[0]);
         const P = [cs.c[0] + 0.6 * (low[0] - cs.c[0]), cs.c[1] + 0.6 * (low[1] - cs.c[1])];
-        const k = lt > 1.0 && lt < 1.15 ? 0 : 1;
+        let k = 1;
+        if (lt >= 1.0 && !R.hNoise) { R.hNoise = true; k = 0; }      // one noisy 'open' reading, as in the 7 Nov video
         inject(lt < 2.0 ? [hand(P[0], P[1], 0.9 * cs.size, k)] : []);
         if (window.__city.grip.n) R.hGrabs++;
         if (window.__city.city$.mode !== 'town') R.hOpened = true;
@@ -67,6 +68,32 @@
           check(!R.hOpened, 'the cube hand’s quick re-grip does not open a building');
           check(R.hDrawn === 0, `the cube hand is not drawn over the town (${R.hDrawn} frames as a free hand)`);
           check(window.__city.hintKey === 'handNone', `with no hand in sight the hint asks for one (${window.__city.hintKey})`);
+        }
+        return { pose: true };
+      } },
+    // the cube moves (on a lap, 7 Nov video 2) and a free hand, first seen with its fingers open, pinches right over
+    // the cube's front on screen: it is not taken for the hand holding the cube, and it takes hold of the map
+    { name: 'lap', dur: 2.2, enter() { R.lapP = null; },
+      update(lt) {
+        const cst = h.cubeState, wob = lt < 1.6 ? 1 : 1 - h.smooth((lt - 1.6) / 0.4);
+        cst.axis.set(0.3, 0, 1).normalize();
+        cst.lift = 0;
+        cst.ang = (4 * Math.sin(lt * 3.3) + 2 * Math.sin(lt * 8.3)) * Math.PI / 180 * wob;
+        const cs = window.__city.cubeOnScreen();
+        if (!cs) return { pose: true };
+        if (!R.lapP) {
+          const d = [cs.c[0] - cs.tc[0], cs.c[1] - cs.tc[1]];
+          const low = cs.hull.reduce((m, p) => (p[0] * d[0] + p[1] * d[1] > m[0] * d[0] + m[1] * d[1] ? p : m), cs.hull[0]);
+          R.lapP = [cs.c[0] + 0.6 * (low[0] - cs.c[0]), cs.c[1] + 0.6 * (low[1] - cs.c[1]), cs.size];
+        }
+        const k = lt < 0.35 ? 0 : 1;
+        inject(lt < 1.2 ? [hand(R.lapP[0], R.lapP[1], 0.9 * R.lapP[2], k)] : []);
+        if (lt > 0.9 && !R.lap1) {
+          R.lap1 = true;
+          const l = window.__city.hands.list;
+          check(window.__city.cubeHeld, 'the cube moving on a lap counts as held');
+          check(l.length === 1 && !l[0].holder, 'a free hand that showed open fingers is not taken for the cube hand');
+          check(window.__city.grip.n === 1, 'its pinch over the cube takes hold of the map');
         }
         return { pose: true };
       } },
@@ -97,44 +124,47 @@
         }
         return { pose: true };
       } },
-    // pinch at A and bring the hand closer (palm 120 -> 180 px): zoom about 2x, the grabbed point stays under the fingers
+    // pinch at A, then spread thumb and index (gap 0 -> 5.2 cm): zoom about 2.2x around the fingers
     { name: 'zoom', dur: 1.9, enter() { A = [W() * 0.45, H() * 0.5]; gA = null; },
       update(lt) {
-        const k = h.smooth((lt - 0.1) / 0.2), m = h.smooth((lt - 0.45) / 1.2);
-        inject([hand(A[0], A[1], lerp(120, 180, m), k)]);
+        const k = lt < 0.1 ? 0 : lt < 0.45 ? h.smooth((lt - 0.1) / 0.2) : lerp(1, 0.35, h.smooth((lt - 0.45) / 1.2));
+        inject([hand(A[0], A[1], 140, k)]);
         if (!gA && window.__city.grip.n === 1) gA = window.__city.grip.g[0].slice();
         if (lt > 1.85 && !R.zoomDone) {
           R.zoomDone = true;
-          const v = window.__city.mapView, want = Math.exp((Math.log(1.5) - 0.08) * 2.2);
-          check(Math.abs(v.z - want) / want < 0.08, `zoom by bringing the hand closer: z ${v.z.toFixed(2)} (expected about ${want.toFixed(2)})`);
+          const v = window.__city.mapView, want = Math.exp((Math.log(0.65 * 0.0794 / 0.025) - 0.08) * 1.25);
+          check(Math.abs(v.z - want) / want < 0.08, `spreading thumb and index zooms in: z ${v.z.toFixed(2)} (expected about ${want.toFixed(2)})`);
           const s = window.__city.mapToScreen(gA[0], gA[1]), e = Math.hypot(s[0] - A[0], s[1] - A[1]);
-          check(e < 8, `zoom keeps the grabbed point under the fingers (${e.toFixed(1)} px)`);
+          check(e < 8, `the zoom stays centred on the fingers (${e.toFixed(1)} px)`);
+          check(window.__city.hintKey === 'handHold', `while holding, the hint explains spreading (${window.__city.hintKey})`);
         }
         return { pose: true };
       } },
-    // still pinched, drag from A to B: the map point under the fingers stays under them
+    // fingers stay spread, the hand moves from A to B: the map point between the fingers stays between them
     { name: 'drag', dur: 1.6, enter() { B = [W() * 0.6, H() * 0.56]; },
       update(lt) {
         const m = h.smooth((lt - 0.1) / 1.1), p = [lerp(A[0], B[0], m), lerp(A[1], B[1], m)];
-        inject([hand(p[0], p[1], 180, 1)]);
+        inject([hand(p[0], p[1], 140, 0.35)]);
+        if (lt < 0.05) R.zAfterZoom = window.__city.mapView.z;
         if (lt > 1.55 && !R.dragDone) {
           R.dragDone = true;
           const s = window.__city.mapToScreen(gA[0], gA[1]), e = Math.hypot(s[0] - B[0], s[1] - B[1]);
-          check(e < 6, `drag: the grabbed point ends ${e.toFixed(1)} px from the fingers`);
-          check(Math.abs(Math.log(window.__city.mapView.z / R.zAfterZoom)) < 0.02 || !R.zAfterZoom, 'dragging sideways does not zoom');
+          check(e < 6, `moving the hand moves the map: the held point ends ${e.toFixed(1)} px from the fingers`);
+          check(Math.abs(Math.log(window.__city.mapView.z / R.zAfterZoom)) < 0.02, 'moving the hand does not zoom');
         }
-        if (lt < 0.05) R.zAfterZoom = window.__city.mapView.z;
         return { pose: true };
       } },
-    { name: 'release', dur: 0.6, update(lt) {
-        const k = 1 - h.smooth(lt / 0.2);
-        inject(lt < 0.4 ? [hand(B[0], B[1], 180, k)] : []);
-        if (lt > 0.55 && !R.relDone) { R.relDone = true; check(window.__city.grip.n === 0, 'letting go releases the map'); }
+    // the hand holds still: after about a second it lets go and the zoom stays; closing the fingers then does nothing
+    { name: 'lock', dur: 2.2, update(lt) {
+        const k = lt < 1.5 ? 0.35 : 1;
+        inject(lt < 1.9 ? [hand(B[0], B[1], 140, k)] : []);
+        if (lt > 1.4 && !R.lock1) { R.lock1 = true; R.zLock = window.__city.mapView.z; check(window.__city.grip.n === 0, 'holding still lets go of the map'); check(Math.abs(R.zLock - R.zAfterZoom) / R.zAfterZoom < 0.02, `the zoom stays when letting go (${R.zLock.toFixed(2)})`); }
+        if (lt > 2.15 && !R.lock2) { R.lock2 = true; check(Math.abs(window.__city.mapView.z - R.zLock) / R.zLock < 0.02, 'closing the fingers after letting go does not zoom out'); }
         return { pose: true };
       } },
     // drag far past the town's edge: the map gives a little, then springs back inside when let go
     { name: 'edge', dur: 2.4, update(lt) {
-        const k = lt < 1.5 ? h.smooth((lt - 0.05) / 0.15) : 0, m = h.smooth((lt - 0.25) / 1.0);
+        const k = h.smooth((lt - 0.05) / 0.15), m = h.smooth((lt - 0.25) / 1.0);   // pinch, drag far, take the hand away
         const p = [lerp(W() * 0.3, W() * 0.95, m), H() * 0.5];
         inject(lt < 1.7 ? [hand(p[0], p[1], 150, k)] : []);
         const v = window.__city.mapView, lim = 138.1 * (1 - 1 / v.z);
@@ -160,21 +190,6 @@
         }
         return { pose: true };
       } },
-    { name: 'gap', dur: 0.5, update() { inject([]); return { pose: true }; } },
-    // a quick pinch on a gold dot opens that building
-    { name: 'tap', dur: 2.0, enter() {
-        const pins = window.__city.pins().filter(p => !p.hidden && window.__city.landmarks.find(l => l.id === p.id).model);
-        tapPin = pins[0];
-        R.tapId = tapPin && tapPin.id;
-      }, update(lt) {
-        if (!tapPin) { if (!R.tapDone) { R.tapDone = true; check(false, 'a gold dot is visible to tap'); } return { pose: true }; }
-        const m = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/.exec(tapPin.tf), x = +m[1], y = +m[2];
-        const k = lt < 0.4 ? 0 : lt < 0.65 ? 1 : 0;
-        inject(lt < 0.9 ? [hand(x, y, 110, k)] : []);
-        if (lt > 1.9 && !R.tapDone) { R.tapDone = true; const c = window.__city.city$; check(c.sel && c.sel.id === tapPin.id && c.mode !== 'town', `quick pinch on ${tapPin.id} opens it (mode ${c.mode})`); }
-        return { pose: true };
-      } },
-    { name: 'back', dur: 2.0, capture: false, enter() { window.__city.goBack(); }, update() { return { pose: true }; } },
     { name: 'whole', dur: 1.0, enter() { document.getElementById('btnMap').click(); },
       update(lt) {
         if (lt > 0.95 && !R.wholeDone) { R.wholeDone = true; const v = window.__city.mapView; check(Math.abs(v.z - 1) < 0.01 && Math.abs(v.cx) < 0.01, `"whole map" goes back to the whole town (z ${v.z.toFixed(2)})`); console.warn('[handtest] RESULT', R.ok ? 'PASS' : 'FAIL'); }

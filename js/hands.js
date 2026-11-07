@@ -8,7 +8,7 @@ export const BONES = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7
 const PALM = [0, 1, 5, 9, 13, 17];
 const PINCH_ON = 0.032, PINCH_OFF = 0.048;   // thumb tip to index tip, metres (MediaPipe world landmarks)
 const RATIO_ON = 0.30, RATIO_OFF = 0.45;     // the same on the picture, relative to the palm (if world data is missing)
-const OPEN_GAP = 0.055, RATIO_OPEN = 0.55;   // fingers clearly apart: needed (twice in a row) before a pinch can start
+const OPEN_GAP = 0.048, RATIO_OPEN = 0.45;   // fingers apart: needed once before a pinch can start; 3 in a row = a free hand
 const LOST = 0.3;                             // seconds a hand is kept after it was last seen
 
 // ---------------- the tracker ----------------
@@ -80,7 +80,7 @@ export class HandSet {
           const d = dist(k.raw[0], s.pts[0]) + (k.side === s.side ? 0 : 60);
           if (d < bd && d < 4 * Math.max(s.palm, 40)) { bd = d; best = k; }
         }
-        if (!best) { best = { id: nextId++, pinch: false, pinchAt: 0, armed: false, holder: false, holderUntil: -10, fp: new OneEuro(2, 1.6, 0.04, 1.0), fs: new OneEuro(1, 1.0, 0.02, 1.0), born: now }; this.hands.push(best); }
+        if (!best) { best = { id: nextId++, pinch: false, pinchAt: 0, armed: false, free: false, holder: false, holderUntil: -10, fp: new OneEuro(2, 1.6, 0.04, 1.0), fs: new OneEuro(1, 1.0, 0.02, 1.0), born: now }; this.hands.push(best); }
         used.add(best);
         best.raw = s.pts; best.side = s.side; best.seen = now;
         // pinch: world landmarks (metres) when there are any, else the picture
@@ -101,7 +101,8 @@ export class HandSet {
         // doesn't arm it. A pinch must hold for two readings to start (no flicker); it ends at once, and opening
         // the fingers again arms the next one.
         best.openN = open ? (best.openN || 0) + 1 : 0;
-        if (best.openN >= 2) best.armed = true;
+        if (best.openN >= 1) best.armed = true;
+        if (best.openN >= 3) best.free = true;      // fingers clearly open for a moment: not a hand gripping the cube
         if (pinched && !best.pinch && best.armed) {
           best.on2 = (best.on2 || 0) + 1;
           if (best.on2 >= 2) { best.pinch = true; best.pinchAt = now; best.on2 = 0; best.armed = false; }

@@ -13,7 +13,7 @@ import { estimateFov, median } from './cv/calib.js';
 import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 import { HandEngine, HandSet, drawHandCutouts, drawPinchCursors } from './hands.js';
 
-const VERSION = '0.11 · 7 Nov 2026';
+const VERSION = '0.12 · 7 Nov 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
@@ -1473,6 +1473,7 @@ function markHolders(list, tn) {
       h.lastHoldCheck = h.seen;
       if (holdsCube(h, cs)) h.holderUntil = tn + 1.0;
     }
+    if (h.free) h.holderUntil = -10;      // seen with its fingers open: a free hand, never the one gripping the cube
     h.holder = tn < h.holderUntil;
     if (h.holder) { h.pinch = false; h.armed = false; h.on2 = 0; }   // and it has to open again before it can pinch
   }
@@ -1517,40 +1518,57 @@ function handHintKey(tn) {
   return 'handNone';
 }
 
-const grip = { key: '', n: 0, g: [], z0: 1, s0: 1, d0: 0, t0: 0, start: [], moved: 0, zoomed: 0, lastP: null, age: 0 };
+const grip = { key: '', n: 0, hid: -1, g: [], z0: 1, d0: 0, t0: 0, start: [], moved: 0, zoomed: 0, gap0: 0.025, gs: 0.025, gapSeen: -1, still: null, endAt: -10 };
+// One hand (v0.12, from the user's 7 Nov video: he spread thumb and index to zoom, like on the screen):
+// pinch thumb and index to take hold of the map; while held, the map point between the fingers follows the hand
+// and spreading / closing the fingers zooms in / out. Holding still for a second, or taking the hand out of the
+// picture, lets go (the map stays as it is); pinch again for the next move. Two hands that both pinch stretch
+// the map between them.
+const AIR_LOCK = 1.1, AIR_DEAD = 0.08, AIR_GAIN = 1.25;
 function handsToMap(list, tn) {
   const can = city$.mode === 'town' && active && townRoot && !touch.n;
-  const pinched = can ? list.filter(h => h.pinch && h.p && !h.holder).slice(0, 2) : [];
-  const key = pinched.map(h => h.id).join(',');
+  const free = can ? list.filter(h => !h.holder && h.p) : [];
+  const two = free.filter(h => h.pinch).slice(0, 2);
+  let key = '';
+  if (two.length === 2) key = two.map(h => h.id).join(',');
+  else if (grip.n === 1 && free.some(h => h.id === grip.hid)) key = String(grip.hid);           // still holding
+  else { const h = free.find(x => x.pinch && x.pinchAt > grip.endAt); if (h) key = String(h.id); }   // a new pinch
   if (key !== grip.key) {
-    // a quick pinch that hardly moved is a tap on the dot under the fingers
-    // (only from a hand that had been tracked a moment before it pinched, so a hand that flickers in can't tap)
-    if (grip.n === 1 && !pinched.length && tn - grip.t0 < 0.45 && grip.moved < 22 && grip.zoomed < 0.05 && grip.lastP && grip.age > 0.3) airTap(grip.lastP);
-    // the set of pinching hands changed: take hold again from where the map is now (no jump)
-    grip.key = key; grip.n = 0; grip.t0 = tn; grip.moved = 0; grip.zoomed = 0; grip.lastP = null; grip.age = pinched.length ? tn - pinched[0].born : 0;
-    const hits = pinched.map(h => planeHit(h.p));
-    if (pinched.length && hits.every(Boolean)) {
-      grip.n = pinched.length; grip.g = hits.map(p => localToMap(p[0], p[1]));
-      grip.z0 = mapView.z; grip.s0 = pinched[0].palm; grip.start = pinched.map(h => h.p.slice());
+    if (grip.n) grip.endAt = tn;
+    // take hold again from where the map is now (no jump)
+    grip.key = key; grip.n = 0; grip.t0 = tn; grip.moved = 0; grip.zoomed = 0;
+    const hands = key ? key.split(',').map(id => free.find(h => String(h.id) === id)) : [];
+    const hits = hands.map(h => planeHit(h.p));
+    if (hands.length && hits.every(Boolean)) {
+      grip.n = hands.length; grip.hid = hands[0].id; grip.g = hits.map(p => localToMap(p[0], p[1]));
+      grip.z0 = mapView.z; grip.start = hands.map(h => h.p.slice());
+      grip.gap0 = Math.max(0.025, hands[0].gap || 0.025); grip.gs = grip.gap0; grip.gapSeen = hands[0].seen;
+      grip.still = { t: tn, p: hands[0].p.slice(), gap: grip.gap0 };
       grip.d0 = grip.n === 2 ? Math.hypot(grip.g[0][0] - grip.g[1][0], grip.g[0][1] - grip.g[1][1]) : 0;
       mapView.anim = null;
-    }
+    } else if (key) grip.key = '';
   }
   if (!grip.n) return;
   const zBefore = mapView.z;
   if (grip.n === 1) {
-    const h = pinched[0];
-    grip.lastP = h.p;
+    const h = free.find(x => x.id === grip.hid);
+    if (h.seen !== grip.gapSeen) { grip.gapSeen = h.seen; grip.gs += 0.5 * ((h.gap || grip.gs) - grip.gs); }   // smoothed finger gap
     grip.moved = Math.max(grip.moved, Math.hypot(h.p[0] - grip.start[0][0], h.p[1] - grip.start[0][1]));
-    // the hand looks bigger when it comes closer: zoom in (a small dead zone keeps a plain drag from zooming)
-    const r = Math.log(h.palm / grip.s0), dead = 0.08;
-    mapView.z = clamp(grip.z0 * Math.exp(Math.sign(r) * Math.max(0, Math.abs(r) - dead) * 2.2), 1, ZMAX);
-    const P = planeHit(h.p);
-    if (P) { mapView.cx = grip.g[0][0] - P[0] / townK(); mapView.cz = grip.g[0][1] - P[1] / townK(); }
+    // fingers apart: zoom in, together: zoom out (a small dead zone keeps a plain move from zooming)
+    const r = Math.log(grip.gs / grip.gap0);
+    mapView.z = clamp(grip.z0 * Math.exp(Math.sign(r) * Math.max(0, Math.abs(r) - AIR_DEAD) * AIR_GAIN), 1, ZMAX);
+    for (let it = 0; it < 2; it++) {           // twice: the ground plane's height depends on the zoom
+      const P = planeHit(h.p);
+      if (P) { mapView.cx = grip.g[0][0] - P[0] / townK(); mapView.cz = grip.g[0][1] - P[1] / townK(); }
+    }
+    // holding still lets go
+    const W = glCanvas.clientWidth || 400;
+    if (Math.hypot(h.p[0] - grip.still.p[0], h.p[1] - grip.still.p[1]) > 0.02 * W || Math.abs(grip.gs - grip.still.gap) > 0.006) grip.still = { t: tn, p: h.p.slice(), gap: grip.gs };
+    else if (tn - grip.still.t > AIR_LOCK) { grip.key = 'done'; grip.n = 0; grip.endAt = tn; }
   } else if (grip.d0 > 3) {
     // two hands: the two grabbed points stay under the two pinches
-    for (let it = 0; it < 2; it++) {           // twice: the ground plane's height depends on the zoom
-      const P1 = planeHit(pinched[0].p), P2 = planeHit(pinched[1].p);
+    for (let it = 0; it < 2; it++) {
+      const P1 = planeHit(two[0].p), P2 = planeHit(two[1].p);
       if (!P1 || !P2) break;
       mapView.z = clamp(Math.hypot(P1[0] - P2[0], P1[1] - P2[1]) / (grip.d0 * townScale()), 1, ZMAX);
       mapView.cx = (grip.g[0][0] + grip.g[1][0]) / 2 - (P1[0] + P2[0]) / 2 / townK();
@@ -1558,7 +1576,7 @@ function handsToMap(list, tn) {
     }
   }
   clampView(true);
-  grip.zoomed = Math.max(grip.zoomed, Math.abs(Math.log(mapView.z / grip.z0)));
+  grip.zoomed = Math.max(grip.zoomed, Math.abs(Math.log(mapView.z / (grip.z0 || 1))));
   if (Math.abs(Math.log(mapView.z / zBefore)) > 0.002) zoomBadgeAt = tn;
 }
 // ---------------- fingers on the screen: two fingers zoom the map, one finger slides it ----------------
@@ -1577,6 +1595,7 @@ function touchGrip() {
   touch.g = hits.map(h => localToMap(h[0], h[1]));
   touch.d0 = touch.n === 2 ? Math.hypot(touch.g[0][0] - touch.g[1][0], touch.g[0][1] - touch.g[1][1]) : 0;
   mapView.anim = null;
+  if (grip.n) grip.endAt = now();
   grip.key = ''; grip.n = 0;                                  // a hand in the air lets go
 }
 function touchFollow() {
@@ -1642,10 +1661,6 @@ window.addEventListener('wheel', e => {
   zoomBadgeAt = now();
 }, { passive: false });
 
-function airTap(p) {
-  const L = nearestPin(p[0], p[1], 44);
-  if (L) select(L.id);
-}
 function updateHands(tn) {
   if (!settings.hands) { handSet.clear(); return []; }
   const list = handSet.update(handInject || hands.latest, toScreen, tn);
