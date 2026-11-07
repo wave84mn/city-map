@@ -2,7 +2,7 @@
 
 Part of **Xplore Prokletije**.
 
-Hold the printed AR cube in front of your phone and the town of Gusinje stands on it. Aim the ring at a building and hold still, or tap its dot, and the building rises out of the map and grows until it fills the cube. Turn the cube upside down (or tap **Grad / Town**) to go back to the map.
+Hold the printed AR cube in front of your phone and the town of Gusinje stands on it. Aim the ring at a building and hold still, or tap its dot, and the building pushes up out of the cube through the cracking stone, with an enamel name sign hanging on the side that faces you. Turn the cube upside down (or tap **Grad / Town**) to go back to the map.
 
 **Open:** https://wave84mn.github.io/city-map/ (Chrome on Android, Safari on iPhone; the page must be opened over https for the camera).
 
@@ -25,7 +25,9 @@ Hold the printed AR cube in front of your phone and the town of Gusinje stands o
   Tracking runs in a worker with MediaPipe Hand Landmarker (GPU where the phone allows, otherwise CPU); it loads about 19 MB the first time (`js/vendor/mediapipe`, `models/hand_landmarker.task`). `?hands=off` starts without it, `?hands=cpu` forces the CPU.
 - **Fingers on the screen (v0.10).** Two fingers zoom the map (spread to zoom in up to 5×, pinch to zoom out); the points of the map you touched stay under your fingers, like a map app. One finger slides the map. **Whole map** (top right) brings the whole town back. On a computer the mouse drags and the wheel zooms around the pointer. A drag or pinch never counts as a tap on a dot, holding still never chooses while fingers are on the screen, and a hand in the air lets go when fingers touch. The map does not turn with the fingers (the cube turns it). The page itself can't scroll or zoom over the map (`touch-action: none`, Safari's gesture events blocked).
 - **Choosing.** The ring in the middle snaps to the nearest dot and shows its name. Hold the cube steady with a gold dot inside the ring for 1.4 s and the building is chosen. Holding only counts while the cube is still; there is a 2 s pause after the town appears, and the building you just left can't be chosen again until the ring has moved off it. You can also tap a dot or a name in the list at the bottom. *Settings → Choose by holding still* turns holding off.
-- **Building.** The town sinks into the cube while the building rises from its spot and grows to fill the cube, door towards you. Buttons: back to town, turn 90°, face me, about (names in all three languages and its jigsaw piece code; the short story comes later).
+- **Building appears out of the floor (v0.14).** A blue ping marks the building's spot on the map, the map sinks into the stone block, the block's top cracks open with blue light from below, and the building pushes up through it at full size, door towards you: it shakes a little and stretches as it shoots up, glows where it comes out of the floor (its cut face glows too, so it never looks hollow), throws stone chips (the ones near the edge tumble off the block) and a ring of dust, and lands with a small squat and a shock ring (2.5 s, `js/rise.js`, timeline in `RISE`). Going back runs it in reverse: the building sinks into the floor and the map comes back up.
+- **Name sign (v0.14).** An enamel street sign (deep blue, white rim, glossy clear coat) with a pictogram of the building type (mosque, church, tower house, clock tower, town hall, sebilj), the name in the app's language, the other two names under it, and the jigsaw piece (map square) like a house number. It hangs on two iron rings from pins on the side of the block that faces you, drops down from over the edge and clacks against the stone; when you walk round the cube it swings up and drops again on the side you now face. On the flat card it hangs from a small wooden frame in front of the building. Different from the museum cube's engraved brass plate.
+- **Building.** Buttons: back to town, turn 90°, face me, about (names in all three languages and its jigsaw piece code; the short story comes later).
 - **Back.** Turn the cube upside down (two quarter-rolls within 2.5 s count too), or tap the back button. Turning it over during the grow reverses it.
 - **Languages:** Montenegrin/Bosnian, Albanian, English (ME / SQ / EN). The first visit follows the phone's language.
 - Works with the printed 70 mm cube, the 60 mm paper cube or the flat paper card (same marker codes as ar-cube).
@@ -48,7 +50,8 @@ Hold the printed AR cube in front of your phone and the town of Gusinje stands o
 | Sebilj (D4), on the little square beside Vezirova | sebilj |
 | Čekića džamija (F6) | cekica-dzamija |
 | Crkva sv. Đorđa (C5) | sv-djordje |
-| Radončića džamija (F4), Balića kuća (E3), Groblje (B3), Sportski tereni (D2), Titex (D2) | name only, no model yet |
+| Nova džamija (F4; Radončića džamija, named Nova džamija / New Mosque / Xhamia e Re at the user's request) | nova-dzamija (the user's own RealityScan scan, 7 Nov 2026) |
+| Balića kuća (E3), Groblje (B3), Sportski tereni (D2), Titex (D2) | name only, no model yet |
 
 Crkva sv. Antona is outside the map area (west, towards Grebaje), so it has no dot.
 
@@ -57,8 +60,9 @@ Crkva sv. Antona is outside the map area (west, towards Grebaje), so it has no d
 - `js/cv/`: own marker detector and pose solver from **ar-cube** (wave84mn/ar-cube); `tracker.js`, `calib.js` and `cvdetect.js` (OpenCV ArUco detector and its loader) from **Gusinjska kocka** (bertiscus/gusinjska-kocka), the loader extended to work in a worker; `worker.js`: the background tracking worker. `data/layout.json`: the cube's marker layout (same as ar-cube and Gusinjska kocka).
 - `js/vendor/opencv/`: OpenCV.js (Apache 2.0, WebAssembly embedded), the same file as Gusinjska kocka's `ar/opencv.js`.
 - `data/town.glb`: the 64 jigsaw pieces from **Slagalica Gusinje** (wave84mn/gusinje-slagalica, `data/pieces.glb`): millimetres, Y up, −Z north, vertex colours (alpha 128 marks water), meshopt-compressed, about 0.27 M triangles.
-- `data/city.json`: the 11 landmarks (names in three languages, jigsaw piece, position on the map in mm) and which model belongs to each.
-- `models/<id>.json` + `.jpg`: building models from **Gusinjska kocka** (bertiscus/gusinjska-kocka), GKM1 format (quantized mesh as base64 JSON) with a 1024 px baked texture; Y up, base at y = 0, door towards +Z.
+- `data/city.json`: the 13 landmarks (names in three languages, jigsaw piece, position on the map in mm) and which model belongs to each.
+- `js/rise.js`: the building pushing up out of the floor (cracks, light, chips, dust, the building material's glow) and the name sign.
+- `models/<id>.json` + `.jpg`: building models from **Gusinjska kocka** (bertiscus/gusinjska-kocka) and, for `nova-dzamija`, made here with `tools/models/convert_vc.py`; GKM1 format (quantized mesh as base64 JSON) with a 1024 px baked texture; Y up, base at y = 0, door towards +Z.
 - `print/`: the cube print files and the paper cube/card PDF (from ar-cube).
 - `img/`: the Xplore Prokletije logo without its background: `xplore-prokletije-light.png` (original colours, for white paper) and `xplore-prokletije-dark.png` (light tower, lifted blue, for dark screens). Made by `tools/logo_prep.py`, which splits each pixel into dark ink, blue ink and paper so edges stay smooth. The app's accent colour is the logo's blue.
 - `print/qr/`: QR cards with the Xplore Prokletije logo in the middle and "Mapa Gusinja" below: `mapa-gusinja-qr-android.png` opens `…/city-map/?p=android`, `mapa-gusinja-qr-windows.png` opens `…/city-map/?p=windows` (error correction H; 300 dpi, about 14 × 18 cm, scale down freely; a 3 cm wide code still scans). Made by `tools/qr_cards.py` (segno).
@@ -67,14 +71,15 @@ Crkva sv. Antona is outside the map area (west, towards Grebaje), so it has no d
 - `js/hands.js` (hand tracker front end, pinch detection, drawing the hand and the cursor), `js/hand-worker.js` (MediaPipe in a module worker), `js/vendor/mediapipe/` (MediaPipe Tasks Vision 0.10.35, Apache 2.0; where the files come from and their hashes are in its README), `models/hand_landmarker.task` (MediaPipe Hand Landmarker, float16 v1).
 
 ## Adding a building
-1. Make the model with Gusinjska kocka's `tools/convert.py` and copy `<id>.json` and `<id>.jpg` into `models/`.
+1. Make the model: a scan with a photo texture with `tools/models/convert.py` (Gusinjska kocka's converter, copied here), a scan with vertex colours (RealityScan's OBJ export) with `tools/models/convert_vc.py tools/models/models.json <id> --out models`. Raw scans go in `tools/models/scans/` (not committed). `convert_vc.py` can cut the building out of its surroundings (`keep` outline, `box`, `ground_below`), straightens the scan and turns the façade named by `front` to +Z; `--preview-only` writes a quick five-view picture to check the cut and the turn, and every run writes a scan-vs-game check sheet to `tools/models/tmp/<id>/`. Nova džamija: the street, parked cars, trees and the plot were cut away, 14 000 triangles, 1024 px texture baked from the vertex colours (620 KB).
 2. In `data/city.json`, add `"model": "<id>"` to its landmark (or add a new landmark with `id`, `piece`, `name` {me, sq, en} and `pos` [x, y, z] in map millimetres; x east, z south, y a little above the roof).
 
 ## Tests (tools/)
 Run from a working folder that has ar-cube's `build/` (layout and face images, from `layout.py`):
 - `seq.py still|flip|orbit OUT.y4m [--fov DEG]`: synthetic camera video of the cube (uses `synth.py` from ar-cube); `--fov 23` makes a telephoto-like camera (the app learns about 19.5° on a 720×1080 crop of it and puts the cube at 943 mm, true 945).
-- `e2e.cjs VIDEO.y4m OUT dwell|nohold|select|flip`: runs the app in Chromium with that video as the camera and a simulated tilt sensor: hold-to-choose, tapping a dot, the list + back button + language switch, and turning the cube upside down.
-- `frames.cjs VIDEO.y4m OUT <landmark>`: screenshots of the grow animation frozen at 0–100 %.
+- `e2e.cjs VIDEO.y4m OUT dwell|nohold|select|flip`: runs the app in Chromium with that video as the camera and a simulated tilt sensor: hold-to-choose, tapping a dot, the list + back button + language switch, and turning the cube upside down. Run `dwell` with `?hands=off` as the last argument: while the hand tracker runs, holding still doesn't choose.
+- `frames.cjs VIDEO.y4m OUT <landmark>`: screenshots of the building coming out of the floor frozen at 0–100 %.
+- `film/rise-demo.js`: a 10 s clip in the film harness (`FILMSEG=tools/film/rise-demo.js node tools/film/film.cjs OUT`, then `tools/film/encode.sh OUT`): the map sinks, Nova džamija pushes up, the name sign drops, the camera goes round and the sign moves to the next side, then back to the town; it checks those steps and prints `RESULT: PASS`.
 - `flip.cjs FLIP.y4m`: choose Opština, then the video turns the cube upside down: records the modes and up faces and checks building → shrink → town.
 - `touch.cjs VIDEO.y4m`: two-finger zoom (touched points stay under the fingers), one-finger slide, Whole map, a drag from a dot doesn't open it, a tap does, mouse wheel zoom, tracking details not saved.
 - `recover.cjs VIDEO.y4m`: pauses the camera video, ends the camera track, and fakes a return to the page; the app must pick the camera up again and find the cube each time.

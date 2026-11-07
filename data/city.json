@@ -47,15 +47,17 @@
    "id": "radoncica",
    "piece": "F4",
    "name": {
-    "me": "Radončića džamija",
-    "en": "Radončić Mosque",
-    "sq": "Xhamia e Radonçiqëve"
+    "me": "Nova džamija",
+    "en": "New Mosque",
+    "sq": "Xhamia e Re"
    },
    "pos": [
     28.5,
     17.9,
     -18.4
-   ]
+   ],
+   "model": "nova-dzamija",
+   "note": "Radončića džamija; the user asked to call it Nova džamija / New Mosque (7 Nov 2026). Model: the user's RealityScan scan."
   },
   {
    "id": "opstina",

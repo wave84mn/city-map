@@ -109,7 +109,7 @@ const { chromium } = require(process.env.PW || '/opt/node22/lib/node_modules/pla
     expect(back && town, 'turning the cube upside down goes back to the town');
   }
   console.log(samples.map(s => JSON.stringify(s)).join('\n'));
-  const errs = logs.filter(l => /error|pageerror/i.test(l));
+  const errs = logs.filter(l => /error|pageerror/i.test(l) && !/error checking is disabled/.test(l));   // a MediaPipe start-up note
   console.log('--- console (' + logs.length + ') ---\n' + logs.slice(0, 25).join('\n'));
   console.log(ok && !errs.length ? 'RESULT: PASS' : 'RESULT: FAIL');
   await browser.close();

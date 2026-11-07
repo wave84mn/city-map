@@ -1,7 +1,8 @@
 // Gusinje city map on the AR cube.
 // Camera -> marker tracking (from ar-cube) -> three.js: the town of Gusinje stands on the cube.
-// Aim the centre ring at a landmark and hold still (or tap its dot / its name) and the building
-// rises out of the map and grows until it fills the cube. Turn the cube upside down to go back.
+// Aim the centre ring at a landmark and hold still (or tap its dot / its name, or pinch it in the air): the map
+// sinks into the cube and the building pushes up out of the floor (js/rise.js), with its name sign on the side
+// facing you. Turn the cube upside down to go back.
 import * as THREE from './vendor/three/three.module.min.js';
 import { GLTFLoader } from './vendor/three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from './vendor/three/addons/libs/meshopt_decoder.module.js';
@@ -12,14 +13,15 @@ import { OneEuro, matToQuat, mulv } from './cv/pose.js';
 import { estimateFov, median } from './cv/calib.js';
 import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 import { HandEngine, HandSet, drawHandCutouts, drawPinchCursors } from './hands.js';
+import { GroundFx, NamePlaque, RISE } from './rise.js';
 
-const VERSION = '0.13 · 7 Nov 2026';
+const VERSION = '0.14 · 7 Nov 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
 
 // timings (seconds)
-const GROW = 1.35, SHRINK = 1.1, DWELL = 1.4, COOLDOWN = 2.0, FLIP_WINDOW = 2.5;
+const GROW = 2.5, SHRINK = 1.1, DWELL = 1.4, COOLDOWN = 2.0, FLIP_WINDOW = 2.5;
 const OPP = [5, 3, 4, 1, 2, 0];          // opposite face (top front right back left bottom)
 
 // ---------------- settings (per-viewer convenience only) ----------------
@@ -101,6 +103,7 @@ const clipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 
 let S = 70;                              // cube edge (mm), from layout
 let plinth, shadowCatcher;
+let groundFx = null, plaque = null;       // the rise out of the floor, and the name sign (js/rise.js)
 
 // ---------------- state ----------------
 let layout, tracker, city = null, townRoot = null, townInfo = null;
@@ -483,6 +486,7 @@ for (const seg of document.querySelectorAll('.langseg')) seg.addEventListener('c
 function onLangChange() {
   if ($('#go') && !$('#go').disabled) $('#go').textContent = tr('start');
   buildChips(); buildPins(); updateDock(); updateInfo(); paintSettings(); updateStatusText(); ringState = '';
+  if (plaque && plaque.L) plaque.set(plaque.L, getLang(), plaqueNames(plaque.L));
   $('#hintText').textContent = tr('pointCam');
 }
 $('#hintText').textContent = tr('pointCam');
@@ -497,6 +501,8 @@ async function init() {
     tracker = new Tracker(layout);
     startEngine();
     buildPlinth();
+    groundFx = new GroundFx(holder, S, clipPlane, GROW);
+    plaque = new NamePlaque(holder, S);
     buildChips();
     const gltf = await loader.loadAsync(city.town.file);
     prepareTown(gltf.scene);
@@ -708,7 +714,9 @@ function loadBuilding(id) {
     const tex = new THREE.Texture(img);
     tex.flipY = false;                   // the baked atlas is stored top row first
     tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4; tex.needsUpdate = true;
-    const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ map: tex, roughness: 0.86, metalness: 0 }));
+    const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.86, metalness: 0 });
+    groundFx.patchMaterial(mat);            // clipped at the floor, glows where it comes out of it
+    const mesh = new THREE.Mesh(g, mat);
     mesh.castShadow = true; mesh.receiveShadow = true;
     const bb = g.boundingBox, sz = bb.getSize(new THREE.Vector3());
     mesh.position.set(-(bb.min.x + bb.max.x) / 2, -bb.min.y, -(bb.min.z + bb.max.z) / 2);   // base centre at the origin
@@ -731,6 +739,12 @@ function fitScale(u) { return Math.min(0.92 * S / u.foot, 1.55 * S / u.height); 
 // ---------------- choosing a building ----------------
 const byId = id => city && city.landmarks.find(l => l.id === id);
 const nameOf = L => (L.name && (L.name[getLang()] || L.name.me)) || L.id;
+// the name sign: the name in the app's language, the other two under it
+function plaqueNames(L) {
+  const main = nameOf(L);
+  const others = ['me', 'en', 'sq'].filter(l => l !== getLang()).map(l => L.name && L.name[l]).filter((v, i, a) => v && v !== main && a.indexOf(v) === i);
+  return { main, others };
+}
 
 async function select(id) {
   const L = byId(id);
@@ -747,15 +761,12 @@ async function select(id) {
   try { wrap = await loadBuilding(L.model); } catch (e) { city$.mode = 'town'; city$.sel = null; toast(tr('errModel', { m: e.message })); return; }
   if (city$.sel !== L) return;
   bldGroup.clear(); bldGroup.add(wrap);
-  const u = wrap.userData, k = townK();
-  // town point (x, y, z) sits at ((x - cx) k, townBaseY + y k, (z - cz) k) in the yaw group (k includes the zoom);
-  // a building chosen from the list while it is outside the frame starts at the frame's edge
-  const h = winHalf(), [lx, lz] = mapToLocal(L.pos[0], L.pos[2]);
-  const p0 = new THREE.Vector3(clamp(lx, -h, h), townBaseY() + L.ground * k, clamp(lz, -h, h));
-  const s0 = (L.hMap * k) / u.height;
-  const s1 = fitScale(u);
-  city$.from = { p: p0, s: s0, yaw: 0 };
-  city$.to = { p: new THREE.Vector3(0, 0.05, 0), s: s1, yaw: cameraYawIn(yawGroup) };
+  // the map sinks into the block, then the building pushes up out of the floor, already at its full size,
+  // facing you (applyGrow); a ping marks where it stood on the map
+  city$.bldH = wrap.userData.height;
+  city$.to = { p: new THREE.Vector3(0, 0.05, 0), s: fitScale(wrap.userData), yaw: cameraYawIn(yawGroup) };
+  groundFx.begin(townRoot, L);
+  plaque.hideNow(); plaque.set(L, getLang(), plaqueNames(L));
   city$.anim = 0; city$.mode = 'grow'; city$.animT0 = now();
   city$.bldSince = city$.animT0; city$.baseLog = [];
   bldGroup.visible = true;
@@ -763,9 +774,9 @@ async function select(id) {
   updateDock(); updateStatusText(); updateInfo();
 }
 function goBack() {
+  if (plaque) plaque.hide(now());
   if (city$.mode === 'building') {
-    city$.from.yaw = 0;
-    city$.to.yaw = city$.byaw;
+    city$.to.yaw = city$.byaw;          // it sinks back into the floor the way it now faces
     city$.mode = 'shrink'; city$.animT0 = now();
     updateDock(); updateStatusText();
   } else if (city$.mode === 'grow') {
@@ -784,19 +795,26 @@ function cameraYawIn(g) {
 }
 const easeIO = x => x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x);
 const lerpAng = (a, b, k) => { let d = b - a; d = Math.atan2(Math.sin(d), Math.cos(d)); return a + d * k; };
-// a = 0: building small at its spot in the town, town in place; a = 1: building fills the cube, town sunk
-function applyGrow(a) {
-  const f = city$.from, to = city$.to, k = townScale();
-  const sink = easeIO((a - 0.08) / 0.72);
+// a = 0: the town in place, the building under the floor; a = 1: the town sunk into the block, the building on it.
+// Timeline in RISE (js/rise.js): the map sinks, the floor cracks with light, the building pushes up through it
+// (stretching a little as it shoots up, squatting a little as it lands), chips and dust fly, a shock ring.
+function applyGrow(a, mode = city$.mode) {
+  const to = city$.to, R = RISE;
+  const sink = easeIO((a - R.sink0) / (R.sink1 - R.sink0));
   const depth = (townInfo.maxY - townInfo.minY) * townK() + 2;
   townGroup.position.y = townBaseY() - sink * depth;
   townGroup.visible = sink < 0.999;
-  const g = easeIO((a - 0.1) / 0.9);
-  const rise = easeIO(a / 0.25) * (1 - g);                       // first lifts off the map a little
-  bldGroup.position.lerpVectors(f.p, to.p, g);
-  bldGroup.position.y += Math.sin(Math.PI * g) * 0.32 * S + rise * 4 * k;
-  bldGroup.scale.setScalar(f.s * Math.pow(to.s / f.s, g));
-  bldGroup.rotation.y = lerpAng(f.yaw, to.yaw, g);
+  const u = clamp((a - R.rise0) / (R.rise1 - R.rise0), 0, 1);
+  const lift = 1 - Math.pow(1 - u, 3);
+  const H = (city$.bldH || 50) * to.s;
+  const tt = a * GROW, shake = u > 0 && u < 1 ? 0.4 * (1 - u) : 0;
+  bldGroup.position.set(to.p.x + shake * Math.sin(tt * 71), to.p.y - (1 - lift) * (H + 2), to.p.z + shake * Math.sin(tt * 53 + 1.3));
+  const land = clamp((a - R.land) / 0.12, 0, 1);
+  const sy = 1 + 0.05 * Math.sin(Math.PI * clamp(u / 0.8, 0, 1)) - 0.035 * Math.sin(Math.PI * land);
+  const sxz = 1 + 0.018 * Math.sin(Math.PI * land);
+  bldGroup.scale.set(to.s * sxz, to.s * sy, to.s * sxz);
+  bldGroup.rotation.y = to.yaw;
+  groundFx.update(a, mode, now(), renderer, camera);
 }
 function stepCity(tNow) {
   if (city$.mode === 'grow') {
@@ -804,6 +822,7 @@ function stepCity(tNow) {
     applyGrow(a);
     if (a >= 1) {
       city$.mode = 'building';
+      groundFx.end(); plaque.show(tNow);
       city$.byaw = city$.byawFrom = city$.byawTo = city$.to.yaw; city$.byt0 = tNow - 10;
       updateDock(); updateStatusText();
       if (city$.pending) { const p = city$.pending; city$.pending = null; if (p !== city$.sel.id) select(p); }
@@ -814,6 +833,7 @@ function stepCity(tNow) {
     if (a <= 0) {
       city$.blocked = city$.sel && city$.sel.id;
       city$.mode = 'town'; bldGroup.visible = false; city$.sel = null;
+      groundFx.end();
       townGroup.position.y = townBaseY(); townGroup.visible = true;
       city$.townSince = tNow; city$.target = null; city$.dwellP = 0;
       updateDock(); updateStatusText();
@@ -1718,7 +1738,7 @@ function updateMapUi(tn) {
 
 // ---------------- render ----------------
 const ease = x => x < 0 ? 0 : x > 1 ? 1 : 1 - Math.pow(1 - x, 3);
-const sunV = new THREE.Vector3(), upW = new THREE.Vector3();
+const sunV = new THREE.Vector3(), upW = new THREE.Vector3(), camLocal = new THREE.Vector3();
 function render(t = now()) {
   const tn = now();
   uTime.value = tn;
@@ -1735,7 +1755,15 @@ function render(t = now()) {
   yawGroup.rotation.y = place.yaw;
   place.appear = Math.min(1, place.appear + 0.12);
   yawGroup.scale.setScalar(0.85 + 0.15 * ease(place.appear));
+  const blockHalf = (plinth && plinth.visible ? S * 1.025 : S) / 2;
+  if (groundFx) groundFx.setFloor(active === 'card', blockHalf);
   stepCity(tn);
+  if (plaque) {
+    // the sign hangs on the side of the block that faces the camera (the camera is at the world's origin)
+    holder.updateMatrixWorld(true);
+    plaque.update(tn, holder.worldToLocal(camLocal.set(0, 0, 0)), active === 'card' ? null : blockHalf);
+    if (!active) plaque.root.visible = false;
+  }
   if (active) {
     anchors[active].updateMatrixWorld(true);       // from the anchor: on the first tracked frame its new pose isn't applied yet
     // clip plane = the face the town stands on
@@ -1895,14 +1923,18 @@ window.__city = {
   // tests: show the grow animation frozen at a (0 = on the map, 1 = fills the cube)
   async freeze(id, a) {
     const L = byId(id), wrap = await loadBuilding(L.model);
-    if (!city$.from || city$.sel !== L) {
+    if (!city$.to || city$.sel !== L) {
       bldGroup.clear(); bldGroup.add(wrap); city$.sel = L;
-      const k = townK(), u = wrap.userData, [lx, lz] = mapToLocal(L.pos[0], L.pos[2]);
-      city$.from = { p: new THREE.Vector3(lx, townBaseY() + L.ground * k, lz), s: (L.hMap * k) / u.height, yaw: 0 };
-      city$.to = { p: new THREE.Vector3(0, 0.05, 0), s: fitScale(u), yaw: cameraYawIn(yawGroup) };
+      city$.bldH = wrap.userData.height;
+      city$.to = { p: new THREE.Vector3(0, 0.05, 0), s: fitScale(wrap.userData), yaw: cameraYawIn(yawGroup) };
+      groundFx.begin(townRoot, L);
+      plaque.set(L, getLang(), plaqueNames(L));
     }
-    city$.mode = 'frozen'; bldGroup.visible = true; applyGrow(a);
+    city$.mode = 'frozen'; bldGroup.visible = true; applyGrow(a, 'frozen');
+    if (a >= 1) plaque.show(now()); else plaque.hideNow();
   },
+  _plaqueCanvas: () => plaque.canvas.toDataURL('image/png'),
+  get plaque() { return plaque && { state: plaque.state, side: plaque.side, theta: plaque.theta, visible: plaque.root.visible }; },
   pins: () => [...pinEls].map(([id, el]) => ({ id, hidden: el.hidden, on: el.classList.contains('on'), tf: el.style.transform })),
   // the map window and hands: tests can hand in tracker results ({hands:[{lm, wl, side}]}) instead of the camera's
   mapView, grip, planeHit, toScreen, localToMap, mapToLocal,

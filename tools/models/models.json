@@ -1,0 +1,40 @@
+{
+ "nova-dzamija": {
+  "obj": "scans/Nova_dzamija_samo_dzamija_MALA.obj",
+  "note": "RealityScan export from the user (7 Nov 2026), vertex colours. Kept: the mosque itself, like the other buildings; cut: its plot, the street, parked cars and trees.",
+  "up": "z",
+  "keep": [
+   [
+    -11.8,
+    -5.0
+   ],
+   [
+    5.6,
+    -13.6
+   ],
+   [
+    12.8,
+    14.0
+   ],
+   [
+    -9.2,
+    7.0
+   ]
+  ],
+  "keep_margin": 0.4,
+  "level": true,
+  "front": [
+   -0.44,
+   -0.9
+  ],
+  "target": 14000,
+  "max_edge": 2.0,
+  "box": [
+   -10.9,
+   -10.0,
+   7.0,
+   11.0
+  ],
+  "ground_below": 5.0
+ }
+}
