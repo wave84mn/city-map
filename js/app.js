@@ -13,7 +13,7 @@ import { estimateFov, median } from './cv/calib.js';
 import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 import { HandEngine, HandSet, drawHandCutouts, drawPinchCursors } from './hands.js';
 
-const VERSION = '0.10 · 6 Nov 2026';
+const VERSION = '0.11 · 7 Nov 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
@@ -320,13 +320,13 @@ $('#btnCam').addEventListener('click', nextCamera);
 // estimates is used and saved per camera and picture size. A wrong field of view makes everything look too
 // close (or too far) and makes corner-on views of the cube fit badly.
 const FOV_KEY = 'citymap.fov';
-const fovS = { value: settings.fovFix || 66, source: settings.fovFix ? 'set' : 'default', samples: [], tick: 0, savedAt: 0, key: '' };
+const fovS = { value: settings.fovFix || 66, source: settings.fovFix ? 'set' : 'default', samples: [], tick: 0, savedAt: 0, key: '', pending: 0 };
 function fovKey() { return `${cam.devId.slice(0, 12) || 'cam'}|${video.videoWidth}x${video.videoHeight}|z${(+cam.zoom).toFixed(2)}`; }
 function fovReset() { fovS.key = ''; }
 function fovLoad() {
   const key = fovKey();
   if (fovS.key === key) return;
-  fovS.key = key; fovS.samples = []; fovS.savedAt = 0;
+  fovS.key = key; fovS.samples = []; fovS.savedAt = 0; fovS.pending = 0;
   if (settings.fovFix) { setFov(settings.fovFix, 'set'); return; }
   try { const saved = JSON.parse(localStorage.getItem(FOV_KEY) || '{}'); if (saved[key]) { setFov(saved[key], 'saved'); return; } } catch { /* none */ }
   setFov(66, 'default');
@@ -356,7 +356,13 @@ function learnFov(res, K) {
   fovS.samples.push(e.fov);
   if (fovS.samples.length > 25) fovS.samples.shift();
   if (fovS.samples.length >= 4) {
-    setFov(median(fovS.samples), 'learned');
+    // Once settled, only a change of a degree or more is applied (each change moves the picture a little and
+    // restarts the pose smoothing). Never while fingers or a hand hold the map: it would slip under them.
+    const want = median(fovS.samples), settled = fovS.source === 'learned' && fovS.samples.length >= 12;
+    if (!settled || Math.abs(want - fovS.value) >= 1.0) {
+      if (grip.n || touch.n) fovS.pending = want;
+      else { fovS.pending = 0; setFov(want, 'learned'); }
+    }
     if (cam.devId && Math.abs((lensFov(cam.devId) || 0) - fovS.value) > 1.5) { lensDb[cam.devId] = { fov: Math.round(fovS.value * 10) / 10, z: cam.zoom }; saveLens(); paintCameraUI(); checkLens(); }
     if (fovS.samples.length >= 6 && fovS.samples.length - fovS.savedAt >= 5) {
       fovS.savedAt = fovS.samples.length;
@@ -944,7 +950,7 @@ function markChips() {
 function updateDock() {
   const inB = city$.mode === 'building' || city$.mode === 'grow';
   $('#bldActions').hidden = !inB;
-  const townHint = settings.hands && hands.state === 'ready' ? tr('handHint') : settings.hands && hands.state === 'loading' ? tr('handLoading') : tr('townHint');
+  const townHint = tr(handHintKey(now()));
   const hint = city$.mode === 'building' ? (settings.upright && sensor.ok ? tr('flipHint') : '') : city$.mode === 'town' && active ? townHint : '';
   $('#dockHint').textContent = hint;
   markChips();
@@ -1219,6 +1225,7 @@ function trackHere(nowMs) {
 
 function afterTracking(res, f, beforeDraw) {
   if (lens.searching && frameNo % 15 === 0) checkLens();
+  if (fovS.pending && !grip.n && !touch.n) { const v = fovS.pending; fovS.pending = 0; setFov(v, 'learned'); }   // held back during a gesture
   lastRes = res; region = f.rg;
   handleResult(res, f.t);
   submitHands();
@@ -1271,7 +1278,7 @@ function handleResult(res, t) {
     a.matrix.multiplyMatrices(CV2GL, tmpM);
     a.matrixWorldNeedsUpdate = true;
   }
-  if (active === 'cube') updateBase(T.cube, t);
+  if (active === 'cube') { updateBase(T.cube, t); trackCubeHeld(t); }
   maybeStartHands(t);
   if (active && place.needFace && townRoot) { faceCamera(false); place.needFace = false; }
   updateStatus(t);
@@ -1361,7 +1368,7 @@ function setYaw(y, animate) {
 // the phone to zoom in, move it away to zoom out. Two hands pinching: stretch or squeeze the map between them.
 // A quick pinch that hardly moves is a tap: it opens the building under the fingers.
 const handCanvas = $('#handfx'), hctx = handCanvas.getContext('2d');
-let handsSeenAt = -10, handInject = null, injectN = 0, zoomBadgeAt = -10;
+let handsSeenAt = -10, handInject = null, injectN = 0, zoomBadgeAt = -10, lastHintKey = '';
 const handSet = new HandSet();
 const hands = new HandEngine((st, info) => {
   if (st === 'error') { console.warn('hand tracking:', info); toast(tr('handErr')); }
@@ -1399,16 +1406,128 @@ function planeHit(p) {
   const s = (y - hitO.y) / hitV.y;
   return s > 0 ? [hitO.x + hitV.x * s, hitO.z + hitV.z * s] : null;
 }
-const grip = { key: '', n: 0, g: [], z0: 1, s0: 1, d0: 0, t0: 0, start: [], moved: 0, zoomed: 0, lastP: null };
+// ---------------- the hand that holds the cube ----------------
+// The hand tracker finds the hand that holds the cube most easily (all of it is in the picture, near the cube), and
+// its grip looks like a pinch. That hand must not grab the map or open buildings, and it is not drawn over the town
+// (it is under the town). A hand holds the cube when at least two of its finger joints lie on the cube's sides on
+// screen (on or right next to the cube's outline, but not over its top face and not beyond the top's far side) and it
+// is not much nearer to the camera than the cube. It keeps counting as holding for a second after that.
+const cubeV = new THREE.Vector3();
+let cubeShape = null, cubeShapeAt = -1;
+function cubeOnScreen(tn) {
+  if (cubeShapeAt === tn) return cubeShape;
+  cubeShapeAt = tn; cubeShape = null;
+  if (active !== 'cube' || !layout || !T.cube.q) return null;
+  const a = anchors.cube; a.updateMatrixWorld(true);
+  const W = glCanvas.clientWidth, H = glCanvas.clientHeight, h = S / 2, N = layout.faces[T.cube.base].N;
+  const pts = [], top = [];
+  for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
+    cubeV.set(sx * h, sy * h, sz * h).applyMatrix4(a.matrixWorld).project(camera);
+    if (cubeV.z > 1) return null;
+    const p = [(cubeV.x + 1) / 2 * W, (1 - cubeV.y) / 2 * H];
+    pts.push(p);
+    if (sx * N[0] + sy * N[1] + sz * N[2] > 0.5) top.push(p);
+  }
+  const hull = convexHull(pts);
+  const mean = q => [q.reduce((x, p) => x + p[0], 0) / q.length, q.reduce((y, p) => y + p[1], 0) / q.length];
+  cubeShape = { hull, top: convexHull(top), size: Math.sqrt(Math.max(1, polyArea(hull))), c: mean(pts), tc: mean(top) };
+  return cubeShape;
+}
+const FINGER_JOINTS = [3, 4, 7, 8, 11, 12, 15, 16, 19, 20];
+// Is anyone holding the cube? On a table or a stand its tilt against gravity stays put; in a hand it wanders.
+// Moving the phone doesn't change that tilt (the tilt sensor turns with the camera), so this tells a held cube from a
+// shaking phone. While the cube rests, no hand counts as holding it: then a pinch over the near part of the town,
+// which on screen covers the cube's front, always works. Without a tilt sensor the cube may be held.
+const heldLog = [];
+let heldUntil = -10;
+const heldN = new THREE.Vector3(), heldQ = new THREE.Quaternion();
+function trackCubeHeld(t) {
+  const st = T.cube, up = upInCamera();
+  if (active !== 'cube' || !st.q || !up) return;
+  heldQ.set(st.q[0], st.q[1], st.q[2], st.q[3]);
+  heldN.set(...layout.faces[st.base].N).applyQuaternion(heldQ);
+  const a = Math.acos(clamp(heldN.x * up[0] + heldN.y * up[1] + heldN.z * up[2], -1, 1)) / D2R;
+  heldLog.push([t, a, st.base]);
+  while (heldLog.length && t - heldLog[0][0] > 1.0) heldLog.shift();
+  let lo = Infinity, hi = -Infinity, flip = false;
+  for (const [, x, b] of heldLog) { lo = Math.min(lo, x); hi = Math.max(hi, x); if (b !== st.base) flip = true; }
+  if (flip || (heldLog.length >= 5 && hi - lo > 3)) heldUntil = t + 2.0;
+}
+function cubeHeld(tn) { return !upInCamera() || tn < heldUntil; }
+function holdsCube(h, cs) {
+  if (!cs || !h.pts || h.palm / cs.size > 1.9) return false;     // much nearer than the cube: a hand in front of it
+  const m = 0.15 * cs.size, u = [cs.tc[0] - cs.c[0], cs.tc[1] - cs.c[1]], ul = Math.hypot(u[0], u[1]);
+  let side = 0;
+  for (const i of FINGER_JOINTS) {
+    const p = h.pts[i];
+    if (polyDist(p, cs.hull) > m || inPoly(p, cs.top)) continue;  // off the cube, or over its top (a pinch above the town)
+    if (ul > 0.08 * cs.size && (p[0] - cs.tc[0]) * u[0] + (p[1] - cs.tc[1]) * u[1] > 0) continue;   // beyond the top's far side
+    if (++side >= 2) return true;
+  }
+  return false;
+}
+function markHolders(list, tn) {
+  const cs = cubeHeld(tn) ? cubeOnScreen(tn) : null;
+  for (const h of list) {
+    if (h.seen === tn || h.lastHoldCheck !== h.seen) {           // once per new reading
+      h.lastHoldCheck = h.seen;
+      if (holdsCube(h, cs)) h.holderUntil = tn + 1.0;
+    }
+    h.holder = tn < h.holderUntil;
+    if (h.holder) { h.pinch = false; h.armed = false; h.on2 = 0; }   // and it has to open again before it can pinch
+  }
+}
+// small 2D helpers (screen px)
+function convexHull(P) {
+  const p = P.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (p.length < 3) return p;
+  const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [], up = [];
+  for (const q of p) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+  for (let i = p.length - 1; i >= 0; i--) { const q = p[i]; while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
+  return lo.slice(0, -1).concat(up.slice(0, -1));
+}
+function polyArea(P) { let a = 0; for (let i = 0; i < P.length; i++) { const p = P[i], q = P[(i + 1) % P.length]; a += p[0] * q[1] - q[0] * p[1]; } return Math.abs(a) / 2; }
+function inPoly(p, P) {
+  if (P.length < 3) return false;
+  let c = false;
+  for (let i = 0, j = P.length - 1; i < P.length; j = i++) {
+    const a = P[i], b = P[j];
+    if ((a[1] > p[1]) !== (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]) c = !c;
+  }
+  return c;
+}
+function polyDist(p, P) {
+  if (inPoly(p, P)) return 0;
+  let d = Infinity;
+  for (let i = 0; i < P.length; i++) {
+    const a = P[i], b = P[(i + 1) % P.length], dx = b[0] - a[0], dy = b[1] - a[1];
+    const t = clamp(((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / Math.max(1e-9, dx * dx + dy * dy), 0, 1);
+    d = Math.min(d, Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy));
+  }
+  return d;
+}
+// what the hand tracker sees right now, for the hint under the map
+function handHintKey(tn) {
+  if (!(settings.hands && (hands.state === 'ready' || handInject))) return settings.hands && hands.state === 'loading' ? 'handLoading' : 'townHint';
+  if (grip.n) return 'handHold';
+  const recent = handSet.hands.filter(h => tn - h.seen < 0.5);
+  if (recent.some(h => !h.holder)) return 'handSeen';
+  if (recent.some(h => h.holder)) return 'handCubeOnly';
+  return 'handNone';
+}
+
+const grip = { key: '', n: 0, g: [], z0: 1, s0: 1, d0: 0, t0: 0, start: [], moved: 0, zoomed: 0, lastP: null, age: 0 };
 function handsToMap(list, tn) {
   const can = city$.mode === 'town' && active && townRoot && !touch.n;
-  const pinched = can ? list.filter(h => h.pinch && h.p).slice(0, 2) : [];
+  const pinched = can ? list.filter(h => h.pinch && h.p && !h.holder).slice(0, 2) : [];
   const key = pinched.map(h => h.id).join(',');
   if (key !== grip.key) {
     // a quick pinch that hardly moved is a tap on the dot under the fingers
-    if (grip.n === 1 && !pinched.length && tn - grip.t0 < 0.45 && grip.moved < 22 && grip.zoomed < 0.05 && grip.lastP) airTap(grip.lastP);
+    // (only from a hand that had been tracked a moment before it pinched, so a hand that flickers in can't tap)
+    if (grip.n === 1 && !pinched.length && tn - grip.t0 < 0.45 && grip.moved < 22 && grip.zoomed < 0.05 && grip.lastP && grip.age > 0.3) airTap(grip.lastP);
     // the set of pinching hands changed: take hold again from where the map is now (no jump)
-    grip.key = key; grip.n = 0; grip.t0 = tn; grip.moved = 0; grip.zoomed = 0; grip.lastP = null;
+    grip.key = key; grip.n = 0; grip.t0 = tn; grip.moved = 0; grip.zoomed = 0; grip.lastP = null; grip.age = pinched.length ? tn - pinched[0].born : 0;
     const hits = pinched.map(h => planeHit(h.p));
     if (pinched.length && hits.every(Boolean)) {
       grip.n = pinched.length; grip.g = hits.map(p => localToMap(p[0], p[1]));
@@ -1530,7 +1649,8 @@ function airTap(p) {
 function updateHands(tn) {
   if (!settings.hands) { handSet.clear(); return []; }
   const list = handSet.update(handInject || hands.latest, toScreen, tn);
-  if (list.length) handsSeenAt = tn;
+  markHolders(list, tn);
+  if (list.some(h => !h.holder)) handsSeenAt = tn;
   handsToMap(list, tn);
   return list;
 }
@@ -1614,6 +1734,7 @@ function render(t = now()) {
   drawHands(handList);
   updatePins(tn);
   updateMapUi(tn);
+  if (city$.mode === 'town' && active && handHintKey(tn) !== lastHintKey) { lastHintKey = handHintKey(tn); updateDock(); }
   drawDebug();
 }
 
@@ -1667,7 +1788,7 @@ function drawDebug() {
       `video ${view.vw}x${view.vh} ${view.mode || ''}  proc ${PROC}  fov ${fovS.value.toFixed(1)}° ${fovS.source}`,
       `cam ${camNo}/${cam.list.length} "${(cam.label || '?').slice(0, 22)}"  zoom ${(+cam.zoom).toFixed(1)}${cam.caps.zoom ? ` (${cam.caps.zoom.min}-${cam.caps.zoom.max})` : ''}`,
       `mode ${city$.mode}  tilt ${sensor.ok ? 'on' : 'off'}  town ${townInfo ? Math.round(townInfo.tris / 1000) + 'k' : '-'} tris`,
-      `hands ${settings.hands ? hands.state : 'off'} ${hands.delegate}  ${hands.ms.toFixed(0)}ms  ${hands.rate.toFixed(0)}/s  seen ${handSet.hands.length}  zoom ${mapView.z.toFixed(1)}`,
+      `hands ${settings.hands ? hands.state : 'off'} ${hands.delegate}  ${hands.ms.toFixed(0)}ms  ${hands.rate.toFixed(0)}/s  seen ${handSet.hands.filter(h => !h.holder).length}+${handSet.hands.filter(h => h.holder).length}cube  zoom ${mapView.z.toFixed(1)}`,
     ].join('\n');
   }
   if (dbgText.textContent !== text) dbgText.textContent = text;
@@ -1758,6 +1879,9 @@ window.__city = {
     return [(v.x + 1) / 2 * glCanvas.clientWidth, (1 - v.y) / 2 * glCanvas.clientHeight];
   },
   get hands() { return { state: hands.state, delegate: hands.delegate, ms: hands.ms, rate: hands.rate, list: handSet.hands }; },
+  get fov() { return { value: fovS.value, source: fovS.source, pending: fovS.pending }; }, get touchGrab() { return touch.n ? touch.g.map(g => g.slice()) : null; },
+  cubeOnScreen() { return cubeOnScreen(now()); }, get cubeHeld() { return cubeHeld(now()); },
+  get hintKey() { return handHintKey(now()); },
   injectHands(r) { handInject = r ? Object.assign({}, r, { id: 'inj' + (++injectN) }) : null; },
   // showcase video (tools/film): run without a camera. Each frame gets a picture (any canvas) and, when the
   // cube is in view, its pose (R row-major 3x3, t in mm, OpenCV camera axes); the rest is the normal app.

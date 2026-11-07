@@ -21,7 +21,9 @@ const { chromium } = require(process.env.PW || '/opt/node22/lib/node_modules/pla
   await page.click('#go');
   await page.evaluate(() => setInterval(() => window.dispatchEvent(new DeviceOrientationEvent('deviceorientation', { alpha: 0, beta: 90, gamma: 0 })), 50));
   await page.waitForFunction(() => window.__city.active === 'cube' && window.__city.eng.kind === 'worker', null, { timeout: 40000 });
-  await page.waitForTimeout(2000);
+  // the camera's field of view is learned from the cube in the first seconds: start once it has settled
+  await page.waitForFunction(() => window.__city.fov.source !== 'default', null, { timeout: 20000 }).catch(() => console.log('note: field of view not learned'));
+  await page.waitForTimeout(1500);
 
   // the town's centre on screen
   const c = await page.evaluate(() => { const a = window.__city, r = document.getElementById('gl').getBoundingClientRect(); return [r.width / 2, r.height * 0.5]; });
@@ -31,10 +33,11 @@ const { chromium } = require(process.env.PW || '/opt/node22/lib/node_modules/pla
   let A = [c[0] - 45, c[1] + 40], B = [c[0] + 45, c[1] + 40];
   for (const dy of [40, 70, 100, -60, 130]) { A = [c[0] - 45, c[1] + dy]; B = [c[0] + 45, c[1] + dy]; if (free(A) && free(B)) break; }
 
-  // 1) pinch out
-  const gA = await mapAt(A), gB = await mapAt(B);
+  // 1) pinch out (the map points the app grabbed under the two fingers must stay under them)
   const v0 = await view();
   await touchEv('touchStart', [A, B]);
+  const [gA, gB] = await page.evaluate(() => window.__city.touchGrab);
+  const fov0 = await page.evaluate(() => window.__city.fov.value);
   const A2 = [A[0] - 60, A[1]], B2 = [B[0] + 60, B[1]];   // a straight spread (the map does not turn with the fingers; the cube turns it)
   for (let i = 1; i <= 10; i++) {
     const k = i / 10;
@@ -43,6 +46,7 @@ const { chromium } = require(process.env.PW || '/opt/node22/lib/node_modules/pla
   }
   const v1 = await view();
   const hA = await mapAt(A2), hB = await mapAt(B2);
+  expect(await page.evaluate(() => window.__city.fov.value) === fov0, 'the field of view does not change while the fingers hold the map');
   await touchEv('touchEnd', []);
   const err = Math.max(Math.hypot(hA[0] - gA[0], hA[1] - gA[1]), Math.hypot(hB[0] - gB[0], hB[1] - gB[1]));
   expect(v1.z > 2 && v1.z <= 5.001, `two fingers spread: zoom ${v0.z} -> ${v1.z}`);

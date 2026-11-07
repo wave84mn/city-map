@@ -27,13 +27,76 @@
   const inject = (hs) => window.__city.injectHands(hs ? { hands: hs } : null);
   const lerp = (a, b, k) => a + (b - a) * k;
   const W = () => innerWidth, H = () => innerHeight;
-  let A, B, gA, C, D, gC, gD, tapPin;
+  let A, B, gA, C, D, gC, gD, tapPin, E, holdP;
 
   window.__filmSegments = (h) => [
     { name: 'setup', dur: 1.6, capture: false, enter() {
         Object.assign(h.rig, { az: 8, el: 52, dist: 300, tx: 0, ty: 40, tz: 0, shake: 0 });
         h.uiAlpha(1); h.app.settings.hold = false; inject(null);
       }, update() { return { pose: true }; } },
+    // the hand that holds the cube (from the 7 Nov phone video): the cube is lifted and tilts a little as a hand
+    // holds it; thumb and index meet on the cube's front face and the grip loosens and closes again (a quick
+    // "pinch") halfway. That hand must not grab, tap or be drawn.
+    { name: 'holder', dur: 2.45, enter() { R.hGrabs = 0; R.hOpened = false; R.hDrawn = 0; },
+      update(lt) {
+        const cst = h.cubeState, wob = lt < 1.9 ? 1 : 1 - h.smooth((lt - 1.9) / 0.4);
+        cst.axis.set(1, 0, 0.4).normalize();
+        cst.lift = 35 * h.smooth(lt / 0.3) * wob;
+        cst.ang = (5 * Math.sin(lt * 4.2) + 3 * Math.sin(lt * 9.1)) * Math.PI / 180 * wob;
+        const cs = window.__city.cubeOnScreen();
+        if (!cs) { if (!R.hNoCube) { R.hNoCube = true; check(false, 'the cube is on screen for the holder test'); } return { pose: true }; }
+        // on the cube's front face: between its centre and its lowest corner on screen
+        const d = [cs.c[0] - cs.tc[0], cs.c[1] - cs.tc[1]];
+        const low = cs.hull.reduce((m, p) => (p[0] * d[0] + p[1] * d[1] > m[0] * d[0] + m[1] * d[1] ? p : m), cs.hull[0]);
+        const P = [cs.c[0] + 0.6 * (low[0] - cs.c[0]), cs.c[1] + 0.6 * (low[1] - cs.c[1])];
+        const k = lt > 1.0 && lt < 1.15 ? 0 : 1;
+        inject(lt < 2.0 ? [hand(P[0], P[1], 0.9 * cs.size, k)] : []);
+        if (window.__city.grip.n) R.hGrabs++;
+        if (window.__city.city$.mode !== 'town') R.hOpened = true;
+        if (window.__city.hands.list.some(x => !x.holder) && lt > 0.5 && lt < 2.0) R.hDrawn++;
+        if (lt > 0.8 && !R.h1) {
+          R.h1 = true;
+          const l = window.__city.hands.list;
+          check(window.__city.cubeHeld, 'a lifted, tilting cube counts as held');
+          check(l.length === 1 && l[0].holder, 'the hand gripping the cube is recognised as holding it');
+          check(window.__city.hintKey === 'handCubeOnly', `the hint says the cube hand doesn't count (${window.__city.hintKey})`);
+        }
+        if (lt > 2.4 && !R.h2) {
+          R.h2 = true;
+          check(R.hGrabs === 0, `the cube hand never grabs the map (${R.hGrabs} frames)`);
+          check(!R.hOpened, 'the cube hand’s quick re-grip does not open a building');
+          check(R.hDrawn === 0, `the cube hand is not drawn over the town (${R.hDrawn} frames as a free hand)`);
+          check(window.__city.hintKey === 'handNone', `with no hand in sight the hint asks for one (${window.__city.hintKey})`);
+        }
+        return { pose: true };
+      } },
+    // a free hand above the town that turns up already closed: no grab until it opens its fingers and pinches
+    { name: 'closed', dur: 2.4, enter() { E = [W() * 0.5, H() * 0.36]; },
+      update(lt) {
+        const k = lt < 0.8 ? 1 : lt < 1.1 ? 0 : 1;
+        inject(lt < 1.9 ? [hand(E[0], E[1], 130, k)] : []);
+        if (lt > 0.7 && !R.c1) { R.c1 = true; check(window.__city.grip.n === 0, 'a hand that turns up already closed does not grab'); check(window.__city.hintKey === 'handSeen', `a free hand is reported as seen (${window.__city.hintKey})`); }
+        if (lt > 1.5 && !R.c2) { R.c2 = true; check(window.__city.grip.n === 1, 'once it has opened its fingers, a pinch grabs the map'); check(window.__city.hintKey === 'handHold', `the hint explains dragging (${window.__city.hintKey})`); }
+        return { pose: true };
+      } },
+    // the cube rests on the table again: a free hand pinching over the near part of the town (which on screen covers
+    // the cube's front, the same spot as the holder test) does grab the map
+    { name: 'near', dur: 1.7, enter() { R.n0 = null; },
+      update(lt) {
+        const cs = window.__city.cubeOnScreen();
+        if (!cs) return { pose: true };
+        const d = [cs.c[0] - cs.tc[0], cs.c[1] - cs.tc[1]];
+        const low = cs.hull.reduce((m, p) => (p[0] * d[0] + p[1] * d[1] > m[0] * d[0] + m[1] * d[1] ? p : m), cs.hull[0]);
+        if (!R.n0) R.n0 = [cs.c[0] + 0.6 * (low[0] - cs.c[0]), cs.c[1] + 0.6 * (low[1] - cs.c[1]), cs.size];
+        const k = lt < 0.3 ? 0 : 1;
+        inject(lt < 1.2 ? [hand(R.n0[0], R.n0[1], 0.9 * R.n0[2], k)] : []);
+        if (lt > 0.9 && !R.n1) {
+          R.n1 = true;
+          check(!window.__city.cubeHeld, 'a cube resting on the table is not held');
+          check(window.__city.grip.n === 1, 'with the cube resting, a pinch over the near part of the town grabs the map');
+        }
+        return { pose: true };
+      } },
     // pinch at A and bring the hand closer (palm 120 -> 180 px): zoom about 2x, the grabbed point stays under the fingers
     { name: 'zoom', dur: 1.9, enter() { A = [W() * 0.45, H() * 0.5]; gA = null; },
       update(lt) {
@@ -106,8 +169,8 @@
       }, update(lt) {
         if (!tapPin) { if (!R.tapDone) { R.tapDone = true; check(false, 'a gold dot is visible to tap'); } return { pose: true }; }
         const m = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/.exec(tapPin.tf), x = +m[1], y = +m[2];
-        const k = lt < 0.1 ? 0 : lt < 0.35 ? 1 : 0;
-        inject(lt < 0.6 ? [hand(x, y, 110, k)] : []);
+        const k = lt < 0.4 ? 0 : lt < 0.65 ? 1 : 0;
+        inject(lt < 0.9 ? [hand(x, y, 110, k)] : []);
         if (lt > 1.9 && !R.tapDone) { R.tapDone = true; const c = window.__city.city$; check(c.sel && c.sel.id === tapPin.id && c.mode !== 'town', `quick pinch on ${tapPin.id} opens it (mode ${c.mode})`); }
         return { pose: true };
       } },

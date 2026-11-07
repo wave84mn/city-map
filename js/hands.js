@@ -8,6 +8,7 @@ export const BONES = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7
 const PALM = [0, 1, 5, 9, 13, 17];
 const PINCH_ON = 0.032, PINCH_OFF = 0.048;   // thumb tip to index tip, metres (MediaPipe world landmarks)
 const RATIO_ON = 0.30, RATIO_OFF = 0.45;     // the same on the picture, relative to the palm (if world data is missing)
+const OPEN_GAP = 0.055, RATIO_OPEN = 0.55;   // fingers clearly apart: needed (twice in a row) before a pinch can start
 const LOST = 0.3;                             // seconds a hand is kept after it was last seen
 
 // ---------------- the tracker ----------------
@@ -79,23 +80,32 @@ export class HandSet {
           const d = dist(k.raw[0], s.pts[0]) + (k.side === s.side ? 0 : 60);
           if (d < bd && d < 4 * Math.max(s.palm, 40)) { bd = d; best = k; }
         }
-        if (!best) { best = { id: nextId++, pinch: false, pinchAt: 0, fp: new OneEuro(2, 1.6, 0.04, 1.0), fs: new OneEuro(1, 1.0, 0.02, 1.0), born: now }; this.hands.push(best); }
+        if (!best) { best = { id: nextId++, pinch: false, pinchAt: 0, armed: false, holder: false, holderUntil: -10, fp: new OneEuro(2, 1.6, 0.04, 1.0), fs: new OneEuro(1, 1.0, 0.02, 1.0), born: now }; this.hands.push(best); }
         used.add(best);
         best.raw = s.pts; best.side = s.side; best.seen = now;
         // pinch: world landmarks (metres) when there are any, else the picture
-        let pinched = best.pinch;
+        let pinched = best.pinch, open = false;
         if (s.wl && s.wl.length === 21) {
           const d = dist3(s.wl[4], s.wl[8]);
           best.gap = d;
           pinched = best.pinch ? d < PINCH_OFF : d < PINCH_ON;
+          open = d > OPEN_GAP;
         } else {
           const r = dist(s.pts[4], s.pts[8]) / Math.max(s.palm, 1);
           best.gap = r * 0.1;
           pinched = best.pinch ? r < RATIO_OFF : r < RATIO_ON;
+          open = r > RATIO_OPEN;
         }
-        // a pinch must hold for two readings to start (no flicker); it ends at once
-        if (pinched && !best.pinch) { best.on2 = (best.on2 || 0) + 1; if (best.on2 >= 2) { best.pinch = true; best.pinchAt = now; best.on2 = 0; } }
-        else { best.on2 = 0; if (!pinched && best.pinch) { best.pinch = false; best.releasedAt = now; } }
+        // a pinch only counts if the fingers were seen clearly apart first (two readings in a row): a hand that turns
+        // up already closed (the hand gripping the cube, a fist) never grabs the map, and a single noisy reading
+        // doesn't arm it. A pinch must hold for two readings to start (no flicker); it ends at once, and opening
+        // the fingers again arms the next one.
+        best.openN = open ? (best.openN || 0) + 1 : 0;
+        if (best.openN >= 2) best.armed = true;
+        if (pinched && !best.pinch && best.armed) {
+          best.on2 = (best.on2 || 0) + 1;
+          if (best.on2 >= 2) { best.pinch = true; best.pinchAt = now; best.on2 = 0; best.armed = false; }
+        } else { best.on2 = 0; if (!pinched && best.pinch) { best.pinch = false; best.releasedAt = now; } }
         const mid = [(s.pts[4][0] + s.pts[8][0]) / 2, (s.pts[4][1] + s.pts[8][1]) / 2];
         best.p = best.fp.filter(mid, now);
         best.palm = best.fs.filter([s.palm], now)[0];
@@ -114,7 +124,7 @@ export class HandSet {
 // the real hand over the map: the camera picture cut out along the hand's bones, so fingers stay in front of the town
 export function drawHandCutouts(ctx, hands, img, mapImg, dpr) {
   for (const h of hands) {
-    if (!h.pts) continue;
+    if (!h.pts || h.holder) continue;                // the hand holding the cube is under the town
     const pts = h.pts.map(p => [p[0] * dpr, p[1] * dpr]);
     const w = Math.max(10, h.palm * dpr * 0.26);
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -153,7 +163,7 @@ export function drawPinchCursors(ctx, hands, dpr, accent, pairLine) {
   ctx.save();
   ctx.scale(dpr, dpr);
   for (const h of hands) {
-    if (!h.pts || !h.p) continue;
+    if (!h.pts || !h.p || h.holder) continue;
     const a = h.pts[4], b = h.pts[8];
     const close = Math.max(0, Math.min(1, 1 - ((h.gap || 0.08) - PINCH_ON) / 0.05));
     ctx.lineCap = 'round';

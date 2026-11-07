@@ -10,7 +10,8 @@ async function create(fileset, model, delegate) {
   return HandLandmarker.createFromOptions(fileset, {
     baseOptions: { modelAssetPath: model, delegate },
     runningMode: 'VIDEO', numHands: 2,
-    minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.45, minTrackingConfidence: 0.45,
+    // a little below the defaults: a found hand stays tracked while part of it leaves the picture
+    minHandDetectionConfidence: 0.4, minHandPresenceConfidence: 0.35, minTrackingConfidence: 0.35,
   });
 }
 
