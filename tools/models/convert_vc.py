@@ -169,6 +169,7 @@ def main():
     V = normalize(V, F)
     face_rgb = C[F].mean(1)
     if preview_only:
+        np.savez(os.path.join(tmpdir, 'cut.npz'), V=V, C=C, F=F)
         render_views(V, F, face_rgb, os.path.join(tmpdir, f'{mid}_orient.png'), size=320, title=f'{mid} oriented ({len(F)} triangles)')
         print('  preview written:', os.path.join(tmpdir, f'{mid}_orient.png')); return
     samples = dense_samples_vc(V, F, C)

@@ -1,7 +1,7 @@
 {
  "nova-dzamija": {
   "obj": "scans/Nova_dzamija_samo_dzamija_MALA.obj",
-  "note": "RealityScan export from the user (7 Nov 2026), vertex colours. Kept: the mosque itself, like the other buildings; cut: its plot, the street, parked cars and trees.",
+  "note": "RealityScan export from the user (7 Nov 2026), vertex colours. Used for measurements and colours: the app's model is rebuilt by nova_dzamija.py (the converted scan looked ruined at cube size).",
   "up": "z",
   "keep": [
    [

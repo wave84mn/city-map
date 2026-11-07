@@ -15,7 +15,7 @@ import { t as tr, getLang, setLang, applyStatic, LANGS } from './i18n.js';
 import { HandEngine, HandSet, drawHandCutouts, drawPinchCursors } from './hands.js';
 import { GroundFx, NamePlaque, RISE } from './rise.js';
 
-const VERSION = '0.14 · 7 Nov 2026';
+const VERSION = '0.14.1 · 7 Nov 2026';
 const $ = s => document.querySelector(s);
 const D2R = Math.PI / 180;
 const params = new URLSearchParams(location.search);
@@ -687,34 +687,46 @@ function parseGKM(buf) {
   const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 8, hl)));
   let off = 8 + hl;
   const take = (Ty, n, size) => { const a = new Ty(buf, off, n); off += Math.ceil((n * size) / 4) * 4; return a; };
-  const qp = take(Uint16Array, head.nv * 3, 2), qu = take(Uint16Array, head.nv * 2, 2), qn = take(Int8Array, head.nv * 4, 1);
+  // a model either has texture coordinates (and a baked texture, models/<id>.jpg) or a colour per vertex (head.col)
+  const qp = take(Uint16Array, head.nv * 3, 2);
+  const qu = head.col ? null : take(Uint16Array, head.nv * 2, 2), qc = head.col ? take(Uint8Array, head.nv * 4, 1) : null;
+  const qn = take(Int8Array, head.nv * 4, 1);
   const idx = head.idx32 ? take(Uint32Array, head.nf * 3, 4) : take(Uint16Array, head.nf * 3, 2);
   const lo = head.min, span = head.max.map((v, i) => v - lo[i]);
-  const pos = new Float32Array(head.nv * 3), nor = new Float32Array(head.nv * 3), uv = new Float32Array(head.nv * 2);
+  const pos = new Float32Array(head.nv * 3), nor = new Float32Array(head.nv * 3);
+  const uv = qu ? new Float32Array(head.nv * 2) : null, col = qc ? new Float32Array(head.nv * 3) : null;
+  const lin = c => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));      // sRGB -> linear
   for (let i = 0; i < head.nv; i++) {
     for (let k = 0; k < 3; k++) { pos[3 * i + k] = lo[k] + (qp[3 * i + k] / 65535) * span[k]; nor[3 * i + k] = qn[4 * i + k] / 127; }
-    uv[2 * i] = qu[2 * i] / 65535; uv[2 * i + 1] = qu[2 * i + 1] / 65535;
+    if (uv) { uv[2 * i] = qu[2 * i] / 65535; uv[2 * i + 1] = qu[2 * i + 1] / 65535; }
+    if (col) for (let k = 0; k < 3; k++) col[3 * i + k] = lin(qc[4 * i + k] / 255);
   }
-  return { pos, nor, uv, idx, nf: head.nf, min: lo, max: head.max };
+  return { pos, nor, uv, col, idx, nf: head.nf, min: lo, max: head.max };
 }
 const loadImage = src => new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error('image ' + src)); im.src = src; });
 const bldCache = new Map();
 function loadBuilding(id) {
   if (bldCache.has(id)) return bldCache.get(id);
   const p = (async () => {
-    const [j, img] = await Promise.all([fetch(`models/${id}.json`).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }), loadImage(`models/${id}.jpg`)]);
+    const j = await fetch(`models/${id}.json`).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
     const bin = Uint8Array.from(atob(j.data), c => c.charCodeAt(0)).buffer;
     const m = parseGKM(bin);
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(m.pos, 3));
     g.setAttribute('normal', new THREE.BufferAttribute(m.nor, 3));
-    g.setAttribute('uv', new THREE.BufferAttribute(m.uv, 2));
+    if (m.uv) g.setAttribute('uv', new THREE.BufferAttribute(m.uv, 2));
+    if (m.col) g.setAttribute('color', new THREE.BufferAttribute(m.col, 3));
     g.setIndex(new THREE.BufferAttribute(m.idx, 1));
     g.computeBoundingBox(); g.computeBoundingSphere();
-    const tex = new THREE.Texture(img);
-    tex.flipY = false;                   // the baked atlas is stored top row first
-    tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4; tex.needsUpdate = true;
-    const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.86, metalness: 0 });
+    let mat;
+    if (m.col) mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0 });
+    else {
+      const img = await loadImage(`models/${id}.jpg`);
+      const tex = new THREE.Texture(img);
+      tex.flipY = false;                   // the baked atlas is stored top row first
+      tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4; tex.needsUpdate = true;
+      mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.86, metalness: 0 });
+    }
     groundFx.patchMaterial(mat);            // clipped at the floor, glows where it comes out of it
     const mesh = new THREE.Mesh(g, mat);
     mesh.castShadow = true; mesh.receiveShadow = true;
